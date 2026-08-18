@@ -1,0 +1,33 @@
+# Enables ESP32 internal EMAC support inside the esp_eth component. This is
+# NOT a hardware parameter of our project (GPIOs, polarities, PHY address,
+# etc — all of that lives in main/board_pins.h) — it's just the ESP-IDF
+# switch that compiles the EMAC driver into the firmware. Without it,
+# esp_eth_mac_new_esp32() wouldn't even exist.
+CONFIG_ETH_ENABLED=y
+CONFIG_ETH_USE_ESP32_EMAC=y
+
+# Keep the console quiet at boot: the IDF's own startup chatter (2nd-stage
+# bootloader banner, esp_image segment loading, cpu_start, heap_init,
+# spi_flash probe, app_init banner, efuse_init, main_task) is pure noise
+# for a deployed device. The app's default log level is raised to WARN so
+# none of that INFO-level output prints (IDF-internal warnings/errors
+# still do — e.g. a flash-size mismatch warning would still show), while
+# LOG_MAXIMUM_LEVEL_INFO keeps INFO logs compiled in so our own module
+# tags can be explicitly re-enabled to INFO at runtime — see
+# quiet_boot_noise() in main/poe_luminaire_main.c.
+CONFIG_LOG_DEFAULT_LEVEL_WARN=y
+CONFIG_LOG_MAXIMUM_LEVEL_INFO=y
+
+# Silence the 1st/2nd-stage bootloader's own separate log output (the
+# "ESP-IDF vX.Y.Z 2nd stage bootloader" ... "End of partition table" block)
+# down to warnings/errors only.
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+
+# This board has a 4MB flash chip. Declaring the matching size here fixes
+# the "Detected size(4096k) larger than the size in the binary image
+# header(2048k)" boot warning (the previous default was 2MB, inherited
+# from the original blink example). See partitions.csv for the custom
+# partition table sized for the real 4MB.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"

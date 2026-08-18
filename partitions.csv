@@ -1,0 +1,9 @@
+# Name,   Type, SubType, Offset,  Size, Flags
+# Custom partition table for this board's 4MB flash (see sdkconfig.defaults:
+# CONFIG_ESPTOOLPY_FLASHSIZE_4MB + CONFIG_PARTITION_TABLE_CUSTOM). Same
+# offsets as ESP-IDF's default "single factory app, no OTA" table, just with
+# a bigger factory app partition since 4MB leaves plenty of room — no OTA
+# partitions for this minimal, single-image firmware.
+nvs,      data, nvs,     0x9000,  0x6000,
+phy_init, data, phy,     0xf000,  0x1000,
+factory,  app,  factory, 0x10000, 0x200000,
