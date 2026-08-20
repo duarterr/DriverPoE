@@ -26,7 +26,7 @@
  *       means it's safe to operate.
  *
  *  2) VBUS actually backs it up: the measured DC bus voltage (via
- *     voltage_sense.h, VBUS_MIN_MV in board_pins.h) is above the
+ *     voltage_sense.h, VBUS_MIN_MV in poe_luminaire.h) is above the
  *     configured minimum (default 40V, matching the AUX divider's own
  *     threshold). CDB/T2P are digital handshake signals — they can claim
  *     power is present even if the actual rail is sagging, shorted, or
@@ -44,10 +44,14 @@
  * This module runs a continuous monitoring task that:
  *  - Blinks indicator LED 2 (red) while in low-power mode (condition 1
  *    and/or 2 above not satisfied).
- *  - Cuts the HV9910 (hv9910_disable()) IMMEDIATELY if the combined
- *    verdict drops again (power loss, renegotiation, AUX removed, VBUS
- *    sagging below threshold, thermal overload, etc), even after the
- *    driver was already released once.
+ *  - Cuts the HV9910 (hv9910_disable(0, false)) IMMEDIATELY if the
+ *    combined verdict drops again (power loss, renegotiation, AUX
+ *    removed, VBUS sagging below threshold, thermal overload, etc), even
+ *    after the driver was already released once. persist=false on
+ *    purpose: it doesn't erase the remembered on/off state, so if the
+ *    verdict comes back to "ready" later (power restored), the ready
+ *    branch checks hv9910_was_last_on() and calls hv9910_enable() again,
+ *    bringing the driver back on by itself if it was on before the drop.
  *  - Logs an "EVENT: CDB ..." / "EVENT: T2P ..." / "EVENT: VBUS ..." line
  *    every time ANY individual signal's own debounced state changes,
  *    independently of whether that flips the combined ready/not-ready

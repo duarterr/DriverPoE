@@ -7,3 +7,9 @@
 nvs,      data, nvs,     0x9000,  0x6000,
 phy_init, data, phy,     0xf000,  0x1000,
 factory,  app,  factory, 0x10000, 0x200000,
+# Device identity (serial derivation input, admin key, key epoch) —
+# provisioned once at the production station (see tools/lumtool.py) and
+# read by components/poe_luminaire/devid.c. Deliberately separate from the "nvs" partition
+# above: FACTORY_RESET (via the admin channel) erases only "nvs", never
+# this one, so serial/key/epoch always survive a factory reset.
+idnvs,    data, nvs,     0x210000, 0x4000,

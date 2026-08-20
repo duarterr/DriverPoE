@@ -1,5 +1,5 @@
 #include "voltage_sense.h"
-#include "board_pins.h"
+#include "poe_luminaire.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"

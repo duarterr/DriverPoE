@@ -18,7 +18,7 @@
  *    divider off the AUX bench-power input (see VLED/AUX notes below),
  *    which reads high whenever AUX is above ~40V — so T2P asserted means
  *    either real Type-2 PoE, or the AUX supply being present. See
- *    main/poe_negotiator.h for how CDB and T2P combine into the "ready"
+ *    poe_negotiator.h for how CDB and T2P combine into the "ready"
  *    decision.
  *    https://www.mouser.com/datasheet/2/405/tps2378-447943.pdf
  *  - HV9910/B/C (Microchip/Supertex): the PWMD pin acts both as the
@@ -35,7 +35,7 @@
 
 /* ---------------- Bus/LED voltage sensing (input-only pins / ADC1) ----------------
  * ADC_VLED_P also doubles as the DC bus voltage sense (VBUS) — see
- * main/voltage_sense.h.
+ * voltage_sense.h.
  */
 #define PIN_ADC_VLED_P          GPIO_NUM_34   /* ADC1_CH6 */
 #define PIN_ADC_VLED_N          GPIO_NUM_35   /* ADC1_CH7 */
@@ -119,6 +119,17 @@
  * audible inductor noise. */
 #define HV9910_PWM_FREQ_HZ        10000
 
+/* Default ramp duration (milliseconds -- same unit LEDC's own fade API
+ * uses natively, see hv9910_set_dim()) for brightness transitions when
+ * the caller doesn't specify one explicitly. hv9910_enable()/
+ * hv9910_disable() take ramp_ms as a parameter -- this constant is what
+ * cmd_server.c's ON/OFF/DIM commands (and poe_negotiator.c's automatic
+ * resume) pass when the operator doesn't specify one of their own, so
+ * turning the driver on or off always fades smoothly by default instead
+ * of snapping instantly. The DIM command's optional ramp_ms argument on
+ * the wire is milliseconds too -- no unit conversion anywhere. */
+#define HV9910_DEFAULT_RAMP_MS    250
+
 /* ---------------- IP101G PHY ----------------
  * SMI address (PHY_AD), calculated from the board's actual strap: PHY_AD0
  * pulled up (=1) and PHY_AD3 pulled down (=0). This matches the 32-pin
@@ -148,6 +159,20 @@
  * TPS2378's APD pin (see the PIN_POE_T2P comment above): below this, even
  * if CDB/T2P digitally claim PoE or AUX is present, the actual bus rail
  * doesn't back that up, so poe_negotiator keeps the system in low-power
- * mode and reports why. See main/poe_negotiator.h.
+ * mode and reports why. See poe_negotiator.h.
  */
 #define VBUS_MIN_MV                40000
+
+/* ---------------- Device identity ----------------
+ * Model prefix used in the serial (devid.h): the final serial is
+ * "<prefix>-<12 hex chars of the base MAC>", e.g. "LUM1-A4CF12B93D08".
+ * Change this if a new board revision/model shows up.
+ */
+#define DEVID_MODEL_PREFIX        "LUM1"
+
+/* ---------------- UDP admin channel ----------------
+ * Fixed port for the authenticated channel (admin_channel.h).
+ * Separate from the text command server's port (APP_TCP_PORT) — different
+ * protocols and purposes, don't reuse the same port.
+ */
+#define ADMIN_UDP_PORT             5001

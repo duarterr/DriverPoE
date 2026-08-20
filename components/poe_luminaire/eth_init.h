@@ -3,7 +3,7 @@
  * directly against esp_eth's C API — no Kconfig-driven wrapper. All the
  * fixed ESP32-classic RMII data pins (TXD0=19, TXD1=22, TX_EN=21,
  * RXD0=25, RXD1=26, CRS_DV=27) and the configurable ones (MDC=23,
- * MDIO=18, RESET=5, REF_CLK=0 as input) come from board_pins.h.
+ * MDIO=18, RESET=5, REF_CLK=0 as input) come from poe_luminaire.h.
  *
  * Must only be called AFTER poe_negotiator confirms CDB=HIGH — the whole
  * application waits for PoE negotiation before bringing up the network

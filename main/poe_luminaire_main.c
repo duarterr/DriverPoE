@@ -2,8 +2,13 @@
  * PoE luminaire — minimal firmware.
  *
  * Hardware: ESP32 + IP101G PHY (RMII) + TPS2378 PoE negotiator + HV9910 LED
- * driver. See main/board_pins.h for the full pin map and the sources used
- * to validate each chip's behavior.
+ * driver. See poe_luminaire.h (in components/poe_luminaire/) for the
+ * full pin map and the sources used to validate each chip's behavior.
+ *
+ * This file is the only source in main/ — everything else (hv9910,
+ * poe_negotiator, voltage_sense, eth_init, cmd_server, devid,
+ * admin_channel, and poe_luminaire.h itself) lives in the
+ * components/poe_luminaire component, required below via main/CMakeLists.txt.
  *
  * Boot sequence:
  *   1) hv9910_init() — the very first thing in the firmware: guarantees
@@ -18,21 +23,29 @@
  *      mode: indicator LED 2 (red) blinks and the LED driver stays forced
  *      OFF (the monitoring task cuts the HV9910 immediately if power is
  *      lost again, even after the driver was already released once). See
- *      main/poe_negotiator.h for the full PoE-vs-AUX-vs-VBUS logic.
+ *      poe_negotiator.h for the full PoE-vs-AUX-vs-VBUS logic.
  *   4) Only once ready: brings up the PHY/Ethernet, gets an IP, and
- *      starts the TCP command server.
+ *      starts the TCP command server plus the authenticated UDP admin
+ *      channel (admin_channel.h) — device identity (devid.h) is
+ *      set up right after hv9910_init(), independent of PoE/network
+ *      state. The admin channel depends on the network stack being up,
+ *      so — like the TCP command server — it stays quiet during
+ *      low-power mode; it's meant to survive the *application* hanging
+ *      after power-up, not a total lack of power.
  */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
 
-#include "board_pins.h"
+#include "poe_luminaire.h"
 #include "hv9910.h"
 #include "poe_negotiator.h"
 #include "voltage_sense.h"
 #include "eth_init.h"
 #include "cmd_server.h"
+#include "devid.h"
+#include "admin_channel.h"
 
 static const char *TAG = "MAIN";
 
@@ -55,6 +68,8 @@ static void quiet_boot_noise(void)
     esp_log_level_set("VOLT_SENSE", ESP_LOG_INFO);
     esp_log_level_set("ETH_INIT", ESP_LOG_INFO);
     esp_log_level_set("CMD_SRV", ESP_LOG_INFO);
+    esp_log_level_set("DEVID", ESP_LOG_INFO);
+    esp_log_level_set("ADMIN_CH", ESP_LOG_INFO);
 }
 
 static void init_status_led(void)
@@ -77,6 +92,11 @@ void app_main(void)
     /* 1) Safety first: LED driver guaranteed OFF. */
     hv9910_init();
 
+    /* 1b) Device identity (serial/key/epoch, devid.h) — independent
+     * of PoE/network state, so it's ready by the time the admin channel
+     * comes up further below. */
+    devid_init();
+
     /* 2) Overall status indicator LED (heartbeat / Ethernet link). */
     init_status_led();
 
@@ -94,9 +114,12 @@ void app_main(void)
              poe_negotiator_source_name(poe_negotiator_get_source()),
              poe_negotiator_get_available_power_w());
 
-    /* 5) Only now: initialize PHY/Ethernet and the command server. */
+    /* 5) Only now: initialize PHY/Ethernet, the text command server, and
+     * the authenticated admin channel (needs the network stack to exist —
+     * see the boot-sequence note at the top of this file). */
     eth_bringup();
     cmd_server_start(APP_TCP_PORT);
+    admin_channel_start();
 
     /* 6) Main loop: only handles the status LED heartbeat. All the
      * control logic runs in the poe_negotiator and cmd_server tasks; the

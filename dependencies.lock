@@ -19,6 +19,6 @@ dependencies:
     version: 6.0.2
 direct_dependencies:
 - espressif/ip101
-manifest_hash: 23a2303903946eb7553c9dc2c38ad90fb08d358a0e76e57078bd2667cea8e922
+manifest_hash: ddd7cfa44356e026f3b9fac21fe6134528099bb0aeb5d90a665dc3e34741359f
 target: esp32
 version: 3.0.0

@@ -1,5 +1,5 @@
 #include "poe_negotiator.h"
-#include "board_pins.h"
+#include "poe_luminaire.h"
 #include "hv9910.h"
 #include "voltage_sense.h"
 #include "driver/gpio.h"
@@ -166,11 +166,26 @@ static void poe_monitor_task(void *arg)
                 ESP_LOGI(TAG, "READY: %s (CDB poe_ok=%d, T2P aux_or_type2=%d, VBUS=%dmV), %.2fW available",
                          poe_negotiator_source_name(s_source), poe_ok, aux_or_type2, vbus_mv,
                          poe_negotiator_get_available_power_w());
+                /* Symmetric with the forced-off cutoff below: if the
+                 * driver was on before power was lost (or before this
+                 * boot, on a fresh power-up after an outage), come back
+                 * on by itself now that power is confirmed safe again --
+                 * ramped (default), persist=false since this only
+                 * restores existing intent, it doesn't create new intent
+                 * (the "on" state is already correctly persisted from
+                 * whenever it was actually set). */
+                if (hv9910_was_last_on()) {
+                    ESP_LOGI(TAG, "Resuming: was ON before, power is ready again");
+                    hv9910_enable(HV9910_DEFAULT_RAMP_MS, false);
+                }
             } else {
                 xEventGroupClearBits(s_evt, POE_READY_BIT);
                 /* Immediate, unconditional cut of the LED driver, even if
-                 * it was already turned on by a remote command. */
-                hv9910_disable();
+                 * it was already turned on by a remote command -- instant
+                 * (ramp_ms=0, no point fading during a power emergency)
+                 * and persist=false, so a real power loss never erases
+                 * the "was on" memory the resume above depends on. */
+                hv9910_disable(0, false);
                 if (digital_source_ok && !vbus_ok) {
                     ESP_LOGW(TAG, "LOW POWER MODE: digital source OK but VBUS too low "
                                   "(CDB poe_ok=%d, T2P aux_or_type2=%d, VBUS=%dmV < %dmV) — driver forced OFF",

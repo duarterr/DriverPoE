@@ -1,9 +1,11 @@
 #include "cmd_server.h"
+#include "poe_luminaire.h"
 #include "hv9910.h"
 #include "poe_negotiator.h"
 #include "voltage_sense.h"
 #include "eth_init.h"
 
+#include <stdbool.h>
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>
@@ -21,7 +23,7 @@
 static const char *TAG = "CMD_SRV";
 
 #define RX_LINE_MAX   96
-#define TX_BUF_MAX    256
+#define TX_BUF_MAX    1024  /* must comfortably fit HELP_TEXT (~680 bytes) */
 
 static void send_line(int sock, const char *msg)
 {
@@ -72,12 +74,36 @@ static void build_status_line(char *out, size_t out_size)
 
 static const char *HELP_TEXT =
     "OK HELP commands:\n"
-    "  PING              -> OK PONG\n"
-    "  STATUS            -> current state (PoE/AUX source, driver, dimming, voltages, IP)\n"
-    "  ON                -> enables the HV9910 driver, resuming the last brightness (requires PoE or AUX confirmed)\n"
-    "  OFF               -> disables the HV9910 driver\n"
-    "  DIM <0-100>       -> sets the brightness (%); DIM 0 also turns the driver off, DIM >0 also turns it on\n"
-    "  HELP              -> this message\n";
+    "  PING                    -> OK PONG\n"
+    "  STATUS                  -> current state (PoE/AUX source, driver, dimming, voltages, IP)\n"
+    "  ON [ramp_ms]            -> enables the HV9910 driver, ramping to the last brightness over ramp_ms milliseconds\n"
+    "                             (default: board's HV9910_DEFAULT_RAMP_MS; requires PoE or AUX confirmed)\n"
+    "  OFF [ramp_ms]           -> ramps the driver off over ramp_ms milliseconds (default: board's\n"
+    "                             HV9910_DEFAULT_RAMP_MS; 0 = instant)\n"
+    "  DIM <0-100> [ramp_ms]   -> ramps the brightness (%) to the target over ramp_ms milliseconds (default: board's\n"
+    "                             HV9910_DEFAULT_RAMP_MS; 0 = instant). DIM 0 also turns the driver off once the\n"
+    "                             ramp finishes, DIM >0 also turns it on (requires PoE or AUX confirmed)\n"
+    "  HELP                    -> this message\n";
+
+/* Parses an optional trailing ramp-time argument (milliseconds), reusing
+ * the board's default when it's missing. Returns false (and leaves
+ * *out_ramp_ms untouched) if the argument is present but not a valid
+ * non-negative integer. */
+static bool parse_optional_ramp_ms(char **saveptr, uint32_t *out_ramp_ms)
+{
+    char *arg = strtok_r(NULL, " \t", saveptr);
+    if (arg == NULL) {
+        *out_ramp_ms = HV9910_DEFAULT_RAMP_MS;
+        return true;
+    }
+    char *endptr = NULL;
+    long parsed = strtol(arg, &endptr, 10);
+    if (endptr == arg || parsed < 0) {
+        return false;
+    }
+    *out_ramp_ms = (uint32_t)parsed;
+    return true;
+}
 
 /* Processes one command line, already stripped of '\r'/'\n'. Writes the
  * response into 'resp' (buffer of size resp_size). */
@@ -110,44 +136,65 @@ static void handle_line(char *line, char *resp, size_t resp_size)
         build_status_line(resp, resp_size);
 
     } else if (strcasecmp(cmd, "ON") == 0) {
-        if (!poe_negotiator_is_ready()) {
+        uint32_t ramp_ms;
+        if (!parse_optional_ramp_ms(&saveptr, &ramp_ms)) {
+            snprintf(resp, resp_size, "ERR BAD_ARG\n");
+        } else if (!poe_negotiator_is_ready()) {
             snprintf(resp, resp_size, "ERR POE_NOT_READY\n");
         } else {
-            hv9910_enable();
-            snprintf(resp, resp_size, "OK ON\n");
+            hv9910_enable(ramp_ms, true); /* true: genuine operator intent, persist */
+            snprintf(resp, resp_size, "OK ON %ums\n", (unsigned)ramp_ms);
         }
 
     } else if (strcasecmp(cmd, "OFF") == 0) {
-        hv9910_disable();
-        snprintf(resp, resp_size, "OK OFF\n");
+        uint32_t ramp_ms;
+        if (!parse_optional_ramp_ms(&saveptr, &ramp_ms)) {
+            snprintf(resp, resp_size, "ERR BAD_ARG\n");
+        } else {
+            hv9910_disable(ramp_ms, true); /* true: genuine operator intent, persist */
+            snprintf(resp, resp_size, "OK OFF %ums\n", (unsigned)ramp_ms);
+        }
 
     } else if (strcasecmp(cmd, "DIM") == 0) {
-        char *arg = strtok_r(NULL, " \t", &saveptr);
-        if (arg == NULL) {
+        char *percent_arg = strtok_r(NULL, " \t", &saveptr);
+        if (percent_arg == NULL) {
             snprintf(resp, resp_size, "ERR MISSING_ARG\n");
         } else {
             char *endptr = NULL;
-            long val = strtol(arg, &endptr, 10);
-            if (endptr == arg || val < 0 || val > 100) {
+            long val = strtol(percent_arg, &endptr, 10);
+            if (endptr == percent_arg || val < 0 || val > 100) {
                 snprintf(resp, resp_size, "ERR BAD_ARG\n");
             } else {
-                hv9910_set_dim_percent((uint8_t)val);
-
-                /* DIM 0 while the driver is on turns it off; DIM > 0
-                 * while the driver is off turns it on, subject to the
-                 * same PoE/AUX gate as the ON command (if the gate
-                 * refuses, the brightness is still recorded/persisted so
-                 * it's ready to apply whenever the driver is allowed to
-                 * turn on). */
-                if (val == 0) {
+                uint32_t ramp_ms;
+                if (!parse_optional_ramp_ms(&saveptr, &ramp_ms)) {
+                    snprintf(resp, resp_size, "ERR BAD_ARG\n");
+                } else if (val == 0) {
+                    /* hv9910_disable() ramps the brightness to 0 itself
+                     * and only cuts SHUTDOWN once that finishes -- one
+                     * call does the whole thing, no separate hv9910_set_dim()
+                     * needed here (calling both would start two fades back
+                     * to back, which classic ESP32's LEDC can't do -- see
+                     * hv9910_set_dim()'s comment). */
                     if (hv9910_is_enabled()) {
-                        hv9910_disable();
+                        hv9910_disable(ramp_ms, true);
                     }
-                } else if (!hv9910_is_enabled() && poe_negotiator_is_ready()) {
-                    hv9910_enable();
+                    snprintf(resp, resp_size, "OK DIM %ld %ums\n", val, (unsigned)ramp_ms);
+                } else {
+                    /* DIM > 0 while the driver is off turns it on FIRST,
+                     * with ramp_ms=0 -- an instant release that takes the
+                     * non-fade code path in hv9910_set_dim() and never
+                     * touches the LEDC fade hardware, so it can't collide
+                     * with the real ramp requested here. Exactly ONE fade
+                     * ever starts, using the caller's actual ramp_ms. If
+                     * the PoE/AUX gate refuses, the brightness is still
+                     * recorded/persisted so it's ready to apply whenever
+                     * the driver is allowed to turn on. */
+                    if (!hv9910_is_enabled() && poe_negotiator_is_ready()) {
+                        hv9910_enable(0, true);
+                    }
+                    hv9910_set_dim((uint8_t)val, ramp_ms);
+                    snprintf(resp, resp_size, "OK DIM %ld %ums\n", val, (unsigned)ramp_ms);
                 }
-
-                snprintf(resp, resp_size, "OK DIM %ld\n", val);
             }
         }
 

@@ -1,5 +1,5 @@
 #include "eth_init.h"
-#include "board_pins.h"
+#include "poe_luminaire.h"
 #include "esp_eth.h"
 #include "esp_eth_mac_esp.h"
 #include "esp_eth_phy_ip101.h"
@@ -68,7 +68,7 @@ void eth_bringup(void)
     /* MAC: ESP32 internal EMAC in RMII. The data pins (TXD0/TXD1/TX_EN/
      * RXD0/RXD1/CRS_DV) are fixed in hardware on the classic ESP32 and
      * don't appear here — only MDC/MDIO/clock are configurable, all
-     * sourced from board_pins.h. */
+     * sourced from poe_luminaire.h. */
     eth_esp32_emac_config_t emac_config = ETH_ESP32_EMAC_DEFAULT_CONFIG();
     emac_config.smi_gpio.mdc_num = PIN_ETH_MDC;
     emac_config.smi_gpio.mdio_num = PIN_ETH_MDIO;

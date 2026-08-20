@@ -11,7 +11,7 @@
  * are (see voltage_reading_t below).
  *
  * Both channels go through the same resistor divider (Rup=560k, Rdown=22k,
- * see VLED_DIVIDER_RATIO in board_pins.h) before reaching the ESP32 pin.
+ * see VLED_DIVIDER_RATIO in poe_luminaire.h) before reaching the ESP32 pin.
  *
  * GPIO34/GPIO35 are "input only" (no output driver, no internal pull) —
  * a good match for pure ADC1 input use.
@@ -22,7 +22,7 @@
  * LED driver's, but don't use this to capture fast ripple).
  *
  * VBUS also feeds directly into the "ready" decision in poe_negotiator.c
- * (VBUS_MIN_MV in board_pins.h) — see poe_negotiator.h.
+ * (VBUS_MIN_MV in poe_luminaire.h) — see poe_negotiator.h.
  */
 #pragma once
 
