@@ -23,7 +23,7 @@
     "interface/ftdi/esp32_devkitj_v1.cfg",
     "target/esp32.cfg"
   ],
-  "idf.portWin": "COM13",
+  "idf.portWin": "COM6",
   "idf.currentSetup": "D:\\ESP\\v6.0.2\\esp-idf",
   "idf.customExtraVars": {
     "IDF_TARGET": "esp32"
