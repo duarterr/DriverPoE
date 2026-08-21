@@ -1,15 +1,45 @@
 # Name,   Type, SubType, Offset,  Size, Flags
 # Custom partition table for this board's 4MB flash (see sdkconfig.defaults:
-# CONFIG_ESPTOOLPY_FLASHSIZE_4MB + CONFIG_PARTITION_TABLE_CUSTOM). Same
-# offsets as ESP-IDF's default "single factory app, no OTA" table, just with
-# a bigger factory app partition since 4MB leaves plenty of room — no OTA
-# partitions for this minimal, single-image firmware.
-nvs,      data, nvs,     0x9000,  0x6000,
-phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, 0x10000, 0x200000,
+# CONFIG_ESPTOOLPY_FLASHSIZE_4MB + CONFIG_PARTITION_TABLE_CUSTOM).
+#
+# Two OTA app slots (ota_0/ota_1) + otadata instead of a single "factory"
+# image, so a future update mechanism can write the new image to the
+# INACTIVE slot and only switch esp_ota_set_boot_partition() over to it
+# once that write verifies -- the currently-running image is never
+# overwritten in place. No actual update-writing logic is implemented yet
+# (no esp_https_ota/esp_ota_begin+write+end calls anywhere in this
+# firmware) -- this is only the partition/Kconfig structure a future OTA
+# client needs, see README.md ("Atualização OTA") and sdkconfig.defaults
+# (CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE). The other half of the rollback
+# contract -- confirming a booted image so the bootloader stops treating
+# it as "pending verify" -- IS implemented: see
+# confirm_app_if_pending_verify() in main/poe_luminaire_main.c.
+#
+# (2026-08-20: briefly reverted to a single-"factory" layout to A/B-test
+# whether the OTA partition table was behind a slow/flaky boot -- it
+# wasn't, the same behavior persisted with the old layout too, so this is
+# back to the OTA-ready structure.)
+#
+# Sizing: each app slot is 1MB. The actual firmware image is currently
+# ~450KB (run `idf.py build` and check the "app partition" free-space
+# line), so each 1MB slot has well over 2x headroom for growth -- 4MB
+# comfortably fits two full-size slots plus everything else below with
+# ~1.9MB left over unused. otadata sits between nvs and phy_init (not
+# after phy_init) specifically so phy_init's own end lands back on the
+# 0x10000 boundary ota_0 needs -- app-type partitions must start on a
+# 64KB-aligned offset; data-type ones (nvs/phy_init/otadata/idnvs) only
+# need 4KB alignment.
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+otadata,  data, ota,     0x10000,  0x2000,
+ota_0,    app,  ota_0,   0x20000,  0x100000,
+ota_1,    app,  ota_1,   0x120000, 0x100000,
 # Device identity (serial derivation input, admin key, key epoch) —
 # provisioned once at the production station (see tools/lumtool.py) and
-# read by components/poe_luminaire/devid.c. Deliberately separate from the "nvs" partition
+# read by components/devid/devid.c. Deliberately separate from the "nvs" partition
 # above: FACTORY_RESET (via the admin channel) erases only "nvs", never
-# this one, so serial/key/epoch always survive a factory reset.
-idnvs,    data, nvs,     0x210000, 0x4000,
+# this one, so serial/key/epoch always survive a factory reset -- and,
+# just as deliberately, separate from "otadata"/ota_0/ota_1 too: a future
+# OTA update swapping the running app image must never touch device
+# identity either.
+idnvs,    data, nvs,     0x220000, 0x4000,

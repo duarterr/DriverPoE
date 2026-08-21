@@ -1,5 +1,4 @@
 #include "devid.h"
-#include "poe_luminaire.h"
 #include "esp_mac.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -17,6 +16,13 @@ static const char *TAG = "DEVID";
 #define NVS_KEY_EPOCH     "epoch"
 
 #define DEVID_ROTATE_TTL_US   (30 * 1000000LL) /* 30s to receive ROTATE_CONFIRM before discarding */
+
+/* Model prefix, copied in from devid_init()'s config argument -- see
+ * devid.h (this one field is retained by pointer, not copied by value:
+ * callers must pass a string with static storage duration). NULL until
+ * devid_init() runs; compute_serial() below falls back to a generic
+ * placeholder in that case rather than risk passing NULL to snprintf. */
+static const char *s_model_prefix;
 
 static bool s_provisioned = false;
 static uint8_t s_active_key[DEVID_KEY_LEN];
@@ -36,6 +42,12 @@ static int64_t s_staged_at_us = 0;
 
 static void compute_serial(void)
 {
+    /* Falls back to a generic placeholder prefix if devid_init() somehow
+     * hasn't run yet (s_model_prefix still NULL) -- keeps this function
+     * safe to call defensively (see devid_get_serial()) without risking
+     * a NULL passed to snprintf's %s. */
+    const char *prefix = s_model_prefix ? s_model_prefix : "UNKNOWN";
+
     uint8_t mac[6] = {0};
     esp_err_t err = esp_efuse_mac_get_default(mac);
     if (err != ESP_OK) {
@@ -43,16 +55,17 @@ static void compute_serial(void)
          * factory-programmed), but never let devid_get_serial() return
          * something empty/undefined. */
         ESP_LOGE(TAG, "esp_efuse_mac_get_default failed (%s) — serial will be incomplete", esp_err_to_name(err));
-        snprintf(s_serial, sizeof(s_serial), "%s-UNKNOWN000000", DEVID_MODEL_PREFIX);
+        snprintf(s_serial, sizeof(s_serial), "%s-UNKNOWN000000", prefix);
     } else {
         snprintf(s_serial, sizeof(s_serial), "%s-%02X%02X%02X%02X%02X%02X",
-                 DEVID_MODEL_PREFIX, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+                 prefix, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     }
     s_serial_computed = true;
 }
 
-void devid_init(void)
+void devid_init(const devid_config_t *config)
 {
+    s_model_prefix = config->model_prefix;
     compute_serial();
     ESP_LOGI(TAG, "Serial: %s", s_serial);
 
@@ -111,6 +124,11 @@ const char *devid_get_serial(void)
         compute_serial();
     }
     return s_serial;
+}
+
+const char *devid_get_model_prefix(void)
+{
+    return s_model_prefix;
 }
 
 const uint8_t *devid_get_key(void)

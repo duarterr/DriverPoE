@@ -1,5 +1,4 @@
 #include "voltage_sense.h"
-#include "poe_luminaire.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
@@ -9,9 +8,10 @@ static const char *TAG = "VOLT_SENSE";
 
 #define ADC_UNIT_USED     ADC_UNIT_1
 #define ADC_ATTEN_USED    ADC_ATTEN_DB_12   /* wide range, needed since VBUS comes from a high-voltage divider (PoE/AUX rail) */
-#define ADC_CH_VLED_P     ADC_CHANNEL_6     /* GPIO34 */
-#define ADC_CH_VLED_N     ADC_CHANNEL_7     /* GPIO35 */
 #define FALLBACK_FULL_SCALE_MV  2450        /* typical effective range at 12dB attenuation, used only if eFuse calibration isn't available */
+
+/* Board wiring, copied in from voltage_sense_init()'s config argument. */
+static voltage_sense_config_t s_config;
 
 static adc_oneshot_unit_handle_t s_adc_handle;
 static adc_cali_handle_t s_cali_handle;
@@ -27,8 +27,12 @@ static int raw_to_mv(int raw)
     return (raw * FALLBACK_FULL_SCALE_MV) / 4095;
 }
 
-void voltage_sense_init(void)
+void voltage_sense_init(const voltage_sense_config_t *config)
 {
+    /* Copied, not just pointer-retained -- config doesn't need to stay
+     * valid after this call returns (see voltage_sense.h). */
+    s_config = *config;
+
     adc_oneshot_unit_init_cfg_t unit_cfg = {
         .unit_id = ADC_UNIT_USED,
     };
@@ -38,8 +42,8 @@ void voltage_sense_init(void)
         .atten = ADC_ATTEN_USED,
         .bitwidth = ADC_BITWIDTH_DEFAULT,
     };
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(s_adc_handle, ADC_CH_VLED_P, &chan_cfg));
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(s_adc_handle, ADC_CH_VLED_N, &chan_cfg));
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(s_adc_handle, s_config.vled_p_channel, &chan_cfg));
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(s_adc_handle, s_config.vled_n_channel, &chan_cfg));
 
     adc_cali_line_fitting_config_t cali_cfg = {
         .unit_id = ADC_UNIT_USED,
@@ -64,19 +68,19 @@ esp_err_t voltage_sense_read(voltage_reading_t *out)
     }
 
     int raw_p = 0, raw_n = 0;
-    esp_err_t err = adc_oneshot_read(s_adc_handle, ADC_CH_VLED_P, &raw_p);
+    esp_err_t err = adc_oneshot_read(s_adc_handle, s_config.vled_p_channel, &raw_p);
     if (err != ESP_OK) {
         return err;
     }
-    err = adc_oneshot_read(s_adc_handle, ADC_CH_VLED_N, &raw_n);
+    err = adc_oneshot_read(s_adc_handle, s_config.vled_n_channel, &raw_n);
     if (err != ESP_OK) {
         return err;
     }
 
     int pin_p_mv = raw_to_mv(raw_p);
     int pin_n_mv = raw_to_mv(raw_n);
-    int vbus_mv = (int)(pin_p_mv * VLED_DIVIDER_RATIO);
-    int vled_n_mv = (int)(pin_n_mv * VLED_DIVIDER_RATIO);
+    int vbus_mv = (int)(pin_p_mv * s_config.divider_ratio);
+    int vled_n_mv = (int)(pin_n_mv * s_config.divider_ratio);
 
     out->vbus_mv = vbus_mv;
     out->led_voltage_mv = vbus_mv - vled_n_mv;

@@ -1,8 +1,8 @@
 # Enables ESP32 internal EMAC support inside the esp_eth component. This is
 # NOT a hardware parameter of our project (GPIOs, polarities, PHY address,
-# etc — all of that lives in main/board_pins.h) — it's just the ESP-IDF
-# switch that compiles the EMAC driver into the firmware. Without it,
-# esp_eth_mac_new_esp32() wouldn't even exist.
+# etc — all of that lives in main/poe_luminaire_main.h) —
+# it's just the ESP-IDF switch that compiles the EMAC driver into the
+# firmware. Without it, esp_eth_mac_new_esp32() wouldn't even exist.
 CONFIG_ETH_ENABLED=y
 CONFIG_ETH_USE_ESP32_EMAC=y
 
@@ -31,3 +31,22 @@ CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# OTA readiness (structure/config only -- see partitions.csv's comment and
+# README.md "Atualização OTA"; no esp_ota_*_update/esp_https_ota calls that
+# actually WRITE a new image exist anywhere in this firmware yet, only the
+# confirm side below). With two OTA app slots now in the partition table,
+# this makes a bad update image safe by default: after a future update
+# mechanism switches the boot partition to the new image, the bootloader
+# marks it "pending verify" and will roll back to the previous slot on its
+# own if the new image never confirms itself (crashes, hangs the watchdog,
+# or loses power during that first boot) via
+# esp_ota_mark_app_valid_cancel_rollback() -- see
+# confirm_app_if_pending_verify() in main/poe_luminaire_main.c, called
+# early in app_main(). Without that call, EVERY boot of an OTA-managed
+# image would stay "pending verify" forever and roll back on the next
+# unconfirmed reset, not just the first boot after a real update.
+#
+# (2026-08-20: briefly disabled to A/B-test against a slow/flaky boot --
+# same behavior with or without it, so this is back on. Not the cause.)
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

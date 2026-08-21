@@ -1,0 +1,230 @@
+#include "eth_init.h"
+#include "esp_eth.h"
+#include "esp_eth_mac_esp.h"
+#include "esp_eth_phy_ip101.h"
+#include "esp_event.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <string.h>
+
+static const char *TAG = "ETH_INIT";
+
+#define ETH_BRINGUP_MAX_RETRIES          5
+#define ETH_BRINGUP_INITIAL_BACKOFF_MS   500
+#define ETH_BRINGUP_MAX_BACKOFF_MS       8000
+
+static bool s_got_ip = false;
+static esp_netif_ip_info_t s_ip_info;
+
+/* Board wiring, copied in from eth_bringup()'s config argument -- read by
+ * try_create_eth() on every (re)attempt. */
+static eth_init_config_t s_config;
+
+static void eth_event_handler(void *arg, esp_event_base_t event_base,
+                               int32_t event_id, void *event_data)
+{
+    (void)arg;
+    (void)event_base;
+    uint8_t mac_addr[6] = {0};
+    esp_eth_handle_t eth_handle = *(esp_eth_handle_t *)event_data;
+
+    switch (event_id) {
+    case ETHERNET_EVENT_CONNECTED:
+        esp_eth_ioctl(eth_handle, ETH_CMD_G_MAC_ADDR, mac_addr);
+        ESP_LOGI(TAG, "Link up. MAC %02x:%02x:%02x:%02x:%02x:%02x",
+                 mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+        break;
+    case ETHERNET_EVENT_DISCONNECTED:
+        ESP_LOGW(TAG, "Link down");
+        s_got_ip = false;
+        break;
+    case ETHERNET_EVENT_START:
+        ESP_LOGI(TAG, "Ethernet started");
+        break;
+    case ETHERNET_EVENT_STOP:
+        ESP_LOGI(TAG, "Ethernet stopped");
+        break;
+    default:
+        break;
+    }
+}
+
+static void got_ip_event_handler(void *arg, esp_event_base_t event_base,
+                                  int32_t event_id, void *event_data)
+{
+    (void)arg;
+    (void)event_base;
+    (void)event_id;
+    ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+    s_ip_info = event->ip_info;
+    s_got_ip = true;
+    ESP_LOGI(TAG, "Got IP: " IPSTR "  mask: " IPSTR "  gw: " IPSTR,
+             IP2STR(&s_ip_info.ip), IP2STR(&s_ip_info.netmask), IP2STR(&s_ip_info.gw));
+}
+
+/* One attempt at creating and starting the MAC/PHY/driver/netif stack.
+ * Fully self-contained: on ANY failure, tears down whatever it already
+ * created in THIS attempt before returning, so a retry starts from a
+ * clean slate rather than leaking a partially-built netif/MAC/PHY on
+ * every failed attempt. Does NOT touch the one-time global init
+ * (esp_netif_init/esp_event_loop_create_default/event handler
+ * registration) -- that only ever runs once, in eth_bringup() below,
+ * regardless of how many times this is retried. */
+static esp_err_t try_create_eth(void)
+{
+    esp_netif_config_t netif_cfg = ESP_NETIF_DEFAULT_ETH();
+    esp_netif_t *eth_netif = esp_netif_new(&netif_cfg);
+    if (eth_netif == NULL) {
+        ESP_LOGE(TAG, "esp_netif_new() failed (out of memory?)");
+        return ESP_ERR_NO_MEM;
+    }
+
+    /* MAC: ESP32 internal EMAC in RMII. The data pins (TXD0/TXD1/TX_EN/
+     * RXD0/RXD1/CRS_DV) are fixed in hardware on the classic ESP32 and
+     * don't appear here — only MDC/MDIO/clock are configurable, all
+     * from the config struct passed to eth_bringup(). */
+    eth_esp32_emac_config_t emac_config = ETH_ESP32_EMAC_DEFAULT_CONFIG();
+    emac_config.smi_gpio.mdc_num = s_config.mdc_pin;
+    emac_config.smi_gpio.mdio_num = s_config.mdio_pin;
+    emac_config.interface = EMAC_DATA_INTERFACE_RMII;
+    emac_config.clock_config.rmii.clock_mode = EMAC_CLK_EXT_IN; /* the IP101G generates the 50MHz clock */
+    emac_config.clock_config.rmii.clock_gpio = s_config.ref_clk_pin;
+
+    eth_mac_config_t mac_config = ETH_MAC_DEFAULT_CONFIG();
+    esp_eth_mac_t *mac = esp_eth_mac_new_esp32(&emac_config, &mac_config);
+    if (mac == NULL) {
+        ESP_LOGE(TAG, "Failed to create MAC instance");
+        esp_netif_destroy(eth_netif);
+        return ESP_FAIL;
+    }
+
+    eth_phy_config_t phy_config = ETH_PHY_DEFAULT_CONFIG();
+    phy_config.phy_addr = s_config.phy_addr;
+    phy_config.reset_gpio_num = s_config.phy_reset_pin;
+
+    esp_eth_phy_t *phy = esp_eth_phy_new_ip101(&phy_config);
+    if (phy == NULL) {
+        ESP_LOGE(TAG, "Failed to create IP101G PHY instance");
+        mac->del(mac);
+        esp_netif_destroy(eth_netif);
+        return ESP_FAIL;
+    }
+
+    esp_eth_handle_t eth_handle = NULL;
+    esp_eth_config_t eth_config = ETH_DEFAULT_CONFIG(mac, phy);
+    esp_err_t err = esp_eth_driver_install(&eth_config, &eth_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to install Ethernet driver (%s)", esp_err_to_name(err));
+        mac->del(mac);
+        phy->del(phy);
+        esp_netif_destroy(eth_netif);
+        return err;
+    }
+    /* From here on, mac/phy are owned by the installed driver --
+     * esp_eth_driver_uninstall() (used in every failure path below) frees
+     * both internally. Calling mac->del()/phy->del() again after this
+     * point would be a double-free. */
+
+    esp_eth_netif_glue_handle_t glue = esp_eth_new_netif_glue(eth_handle);
+    if (glue == NULL) {
+        ESP_LOGE(TAG, "esp_eth_new_netif_glue() failed");
+        esp_eth_driver_uninstall(eth_handle);
+        esp_netif_destroy(eth_netif);
+        return ESP_FAIL;
+    }
+
+    err = esp_netif_attach(eth_netif, glue);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_netif_attach() failed (%s)", esp_err_to_name(err));
+        esp_eth_driver_uninstall(eth_handle);
+        esp_netif_destroy(eth_netif);
+        return err;
+    }
+
+    err = esp_eth_start(eth_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_eth_start() failed (%s)", esp_err_to_name(err));
+        esp_eth_driver_uninstall(eth_handle);
+        esp_netif_destroy(eth_netif);
+        return err;
+    }
+
+    ESP_LOGI(TAG, "Ethernet (IP101G/RMII) installed, PHY addr=%d", s_config.phy_addr);
+    return ESP_OK;
+}
+
+esp_err_t eth_bringup(const eth_init_config_t *config)
+{
+    /* Copied, not just pointer-retained -- config doesn't need to stay
+     * valid after this call returns (see eth_init.h). */
+    s_config = *config;
+
+    /* One-time global init, regardless of how many attempts try_create_eth()
+     * below takes -- calling esp_netif_init()/esp_event_loop_create_default()
+     * or re-registering the same handlers more than once would either
+     * error out (harmlessly) or, worse, register a handler function twice
+     * so every real event fires it twice. ESP_ERR_INVALID_STATE ("already
+     * initialized") is treated as success since eth_bringup() itself is
+     * only ever called once by poe_luminaire_main.c; this is just belt and
+     * suspenders. */
+    esp_err_t err = esp_netif_init();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "esp_netif_init() failed (%s)", esp_err_to_name(err));
+        return err;
+    }
+    err = esp_event_loop_create_default();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "esp_event_loop_create_default() failed (%s)", esp_err_to_name(err));
+        return err;
+    }
+    err = esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID, &eth_event_handler, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register ETH_EVENT handler (%s)", esp_err_to_name(err));
+        return err;
+    }
+    err = esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &got_ip_event_handler, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register IP_EVENT handler (%s)", esp_err_to_name(err));
+        return err;
+    }
+
+    /* Retry only the part that can plausibly fail transiently (MAC/PHY
+     * detection right after power-up, momentary allocation pressure, ...)
+     * -- controlled backoff, bounded attempt count, no esp_restart()
+     * anywhere in this path. If every attempt fails, this returns the
+     * last error and the caller (poe_luminaire_main.c) is responsible for
+     * NOT starting the admin channel and NOT reboot-looping -- the device
+     * keeps running its PoE/driver logic, just unreachable over the
+     * network until the next reboot. */
+    uint32_t backoff_ms = ETH_BRINGUP_INITIAL_BACKOFF_MS;
+    for (int attempt = 1; attempt <= ETH_BRINGUP_MAX_RETRIES; attempt++) {
+        err = try_create_eth();
+        if (err == ESP_OK) {
+            return ESP_OK;
+        }
+        bool will_retry = (attempt < ETH_BRINGUP_MAX_RETRIES);
+        ESP_LOGE(TAG, "Ethernet bring-up attempt %d/%d failed (%s)%s",
+                 attempt, ETH_BRINGUP_MAX_RETRIES, esp_err_to_name(err),
+                 will_retry ? ", retrying..." : " -- giving up");
+        if (will_retry) {
+            vTaskDelay(pdMS_TO_TICKS(backoff_ms));
+            backoff_ms = (backoff_ms * 2 > ETH_BRINGUP_MAX_BACKOFF_MS) ? ETH_BRINGUP_MAX_BACKOFF_MS : backoff_ms * 2;
+        }
+    }
+    return err;
+}
+
+bool eth_has_ip(void)
+{
+    return s_got_ip;
+}
+
+bool eth_get_ip_info(esp_netif_ip_info_t *out)
+{
+    if (!s_got_ip || out == NULL) {
+        return false;
+    }
+    memcpy(out, &s_ip_info, sizeof(s_ip_info));
+    return true;
+}

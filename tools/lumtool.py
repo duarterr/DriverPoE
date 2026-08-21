@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-LUM1 luminaire admin tool -- single self-contained script (this is the
+DriverPoE admin tool -- single self-contained script (this is the
 ONLY .py file in this directory, tests included -- see the bottom of the
 file). No imports from sibling files. Interactive menu only (no
 argparse/CLI flags): run it with no arguments and pick an action.
@@ -10,14 +10,16 @@ collide.
 
 Covers device identity, provisioning, and remote administration end to
 end:
-  - HKDF-SHA256 (RFC 5869) key derivation, matching components/poe_luminaire/devid.h exactly.
-  - The admin channel's binary packet format (components/poe_luminaire/admin_protocol.h).
+  - HKDF-SHA256 (RFC 5869) key derivation, matching components/devid/devid.h exactly.
+  - The admin channel's binary packet format (components/admin_channel/admin_protocol.h).
   - Provisioning a fresh unit entirely over the network (CLAIM, see
     README.md "Provisionar sem debugger") -- no esptool/serial connection
     involved at all, on purpose: this tool never touches flash directly.
     CLAIM is unauthenticated, the same as DISCOVER -- see do_claim().
-  - The authenticated UDP admin commands: discover, status, identify,
-    reboot, factory reset, key rotation.
+  - The authenticated UDP admin commands: discover, status, on/off/dim,
+    identify, reboot, factory reset, key rotation. This channel is the
+    ONLY network control surface the firmware exposes -- there's no
+    separate unauthenticated text/TCP command server anymore.
 
 Master secret: read from DEFAULT_SECRET_FILE ("secret.txt") by default,
 or typed in directly instead (input hidden via getpass). Never accepted
@@ -49,18 +51,18 @@ except ImportError:  # only needed for "rotate admin key"
     AESGCM = None
 
 # --------------------------------------------------------------------- #
-# Identity / key derivation constants -- must match components/poe_luminaire/devid.h exactly.
+# Identity / key derivation constants -- must match components/devid/devid.h exactly.
 # --------------------------------------------------------------------- #
-MODEL_PREFIX = "LUM1"
+MODEL_PREFIX = "DriverPoE"
 KEY_LEN = 32
 MAC_LEN = 6
 
 DEFAULT_SECRET_FILE = Path(__file__).resolve().parent / "secret.txt"
 
 # --------------------------------------------------------------------- #
-# Admin channel wire format -- must match components/poe_luminaire/admin_protocol.h exactly.
+# Admin channel wire format -- must match components/admin_channel/admin_protocol.h exactly.
 # --------------------------------------------------------------------- #
-MAGIC = 0x4C554D31
+MAGIC = 0x44504F45  # "DPOE"
 PROTO_VERSION = 1
 SERIAL_LEN = 24
 NONCE_LEN = 16
@@ -73,6 +75,7 @@ assert HEADER_SIZE == 52, HEADER_SIZE
 
 DEFAULT_PORT = 5001
 DEFAULT_TIMEOUT = 3.0
+DEFAULT_RAMP_MS = 250  # must match HV9910_DEFAULT_RAMP_MS in main/poe_luminaire_main.h
 FALLBACK_BROADCAST = "255.255.255.255"  # used only if the guess below fails
 
 
@@ -118,6 +121,12 @@ class PacketType(IntEnum):
     ROTATE_CONFIRM_RESP = 0x88
     CLAIM = 0x09
     CLAIM_RESP = 0x89
+    ON = 0x0A
+    ON_RESP = 0x8A
+    OFF = 0x0B
+    OFF_RESP = 0x8B
+    DIM = 0x0C
+    DIM_RESP = 0x8C
     ERR_RESP = 0xFF
 
 
@@ -257,7 +266,10 @@ def mac_from_serial(serial: str) -> bytes:
 
 def build_hkdf_info(model: str, epoch: int) -> bytes:
     """"lum-admin-v1" || model || epoch (uint32 big-endian) -- must match
-    what components/poe_luminaire/devid.h / README.md documents exactly."""
+    what README.md documents exactly. The "lum-admin-v1" label is a frozen
+    HKDF domain separator, independent of MODEL_PREFIX/DEVID_MODEL_PREFIX
+    -- see TestDeriveAdminKey.test_golden_vector below for why it must
+    never change casually."""
     return b"lum-admin-v1" + model.encode("ascii") + struct.pack(">I", epoch)
 
 
@@ -267,7 +279,7 @@ def derive_admin_key(master_secret: bytes, mac: bytes, epoch: int, model: str = 
 
 
 # ======================================================================= #
-# Binary packet (components/poe_luminaire/admin_protocol.h)
+# Binary packet (components/admin_channel/admin_protocol.h)
 # ======================================================================= #
 @dataclass
 class Packet:
@@ -512,6 +524,60 @@ def do_identify(ip: str, secret: bytes, model: str = MODEL_PREFIX,
         raise SystemExit(f"{disc.serial}: IDENTIFY refused ({status_name(code)}).")
 
 
+def do_on(ip: str, secret: bytes, ramp_ms: int = DEFAULT_RAMP_MS, model: str = MODEL_PREFIX,
+          port: int = DEFAULT_PORT, timeout: float = DEFAULT_TIMEOUT) -> None:
+    client = AdminClient(ip, port, timeout)
+    disc, info, key = discover_and_derive(client, secret, model)
+
+    pkt = Packet(type=PacketType.ON, serial=disc.serial, epoch=info["epoch"], nonce=b"",
+                 payload=struct.pack(">I", ramp_ms))
+    client.send(pkt, key)
+    resp = client.recv()
+    if resp.type != PacketType.ON_RESP or not resp.verify_hmac(key):
+        raise SystemExit("ON failed (invalid response or wrong HMAC).")
+    code = status_byte(resp.payload)
+    if code != AdminStatus.OK:
+        raise SystemExit(f"ON refused: {status_name(code)}")
+    print(f"{disc.serial}: turning on, ramp={ramp_ms}ms.")
+
+
+def do_off(ip: str, secret: bytes, ramp_ms: int = DEFAULT_RAMP_MS, model: str = MODEL_PREFIX,
+           port: int = DEFAULT_PORT, timeout: float = DEFAULT_TIMEOUT) -> None:
+    client = AdminClient(ip, port, timeout)
+    disc, info, key = discover_and_derive(client, secret, model)
+
+    pkt = Packet(type=PacketType.OFF, serial=disc.serial, epoch=info["epoch"], nonce=b"",
+                 payload=struct.pack(">I", ramp_ms))
+    client.send(pkt, key)
+    resp = client.recv()
+    if resp.type != PacketType.OFF_RESP or not resp.verify_hmac(key):
+        raise SystemExit("OFF failed (invalid response or wrong HMAC).")
+    code = status_byte(resp.payload)
+    if code != AdminStatus.OK:
+        raise SystemExit(f"OFF refused: {status_name(code)}")
+    print(f"{disc.serial}: turning off, ramp={ramp_ms}ms.")
+
+
+def do_dim(ip: str, secret: bytes, percent: int, ramp_ms: int = DEFAULT_RAMP_MS, model: str = MODEL_PREFIX,
+           port: int = DEFAULT_PORT, timeout: float = DEFAULT_TIMEOUT) -> None:
+    if not 0 <= percent <= 100:
+        raise SystemExit(f"percent must be 0-100, got {percent}.")
+
+    client = AdminClient(ip, port, timeout)
+    disc, info, key = discover_and_derive(client, secret, model)
+
+    pkt = Packet(type=PacketType.DIM, serial=disc.serial, epoch=info["epoch"], nonce=b"",
+                 payload=bytes([percent]) + struct.pack(">I", ramp_ms))
+    client.send(pkt, key)
+    resp = client.recv()
+    if resp.type != PacketType.DIM_RESP or not resp.verify_hmac(key):
+        raise SystemExit("DIM failed (invalid response or wrong HMAC).")
+    code = status_byte(resp.payload)
+    if code != AdminStatus.OK:
+        raise SystemExit(f"DIM refused: {status_name(code)}")
+    print(f"{disc.serial}: dimming to {percent}%, ramp={ramp_ms}ms.")
+
+
 def _destructive_command(ip: str, secret: bytes, ptype: int, resp_type: int, label: str, model: str,
                           port: int, timeout: float) -> None:
     client = AdminClient(ip, port, timeout)
@@ -653,21 +719,26 @@ def do_discover(broadcast: str, port: int = DEFAULT_PORT, timeout: float = DEFAU
 
 
 # ======================================================================= #
-# Interactive menu
+# Interactive menu -- scan first, pick a luminaire from the list, then get
+# a device-specific menu with all its options (diskpart-style: "list" ->
+# "select" -> act on the selected item). Commands are split into submenus
+# by category (info & control vs. administration) instead of one long
+# flat list.
 # ======================================================================= #
-_last_ip: str | None = None
+def print_scan_results(results: list[tuple[Packet, str]]) -> None:
+    if not results:
+        print("No unit responded.")
+        return
+    for i, (pkt, src_ip) in enumerate(results, 1):
+        info = parse_discover_payload(pkt.payload)
+        tag = "provisioned" if info["provisioned"] else "UNPROVISIONED"
+        print(f"  [{i}] {pkt.serial}  ip={src_ip}  epoch={info['epoch']}  "
+              f"fw={info['fw_version']}  ({tag})")
 
 
-def pick_device() -> str | None:
-    """Runs a discover and lets the user pick a unit from the list, type
-    an IP manually, or reuse the last one picked in this session."""
-    global _last_ip
-
-    if _last_ip:
-        again = input(f"Reuse {_last_ip}? [Y/n] ").strip().lower()
-        if again in ("", "y", "yes"):
-            return _last_ip
-
+def scan_devices() -> list[tuple[Packet, str]]:
+    """Broadcasts DISCOVER and returns the responses, sorted by serial, for
+    the top-level menu to number and let the operator select from."""
     default_bcast = guess_broadcast_address()
     broadcast = input(f"Broadcast address [{default_bcast}]: ").strip() or default_bcast
     print("Scanning...")
@@ -675,40 +746,48 @@ def pick_device() -> str | None:
         results = broadcast_discover(broadcast, DEFAULT_PORT, DEFAULT_TIMEOUT)
     except OSError as e:
         print(f"Broadcast failed: {e}")
-        results = []
+        return []
+    results.sort(key=lambda r: r[0].serial)
+    print_scan_results(results)
+    return results
 
-    if not results:
-        print("No unit responded.")
-        ip = input("Type an IP manually (Enter to cancel): ").strip()
-        _last_ip = ip or None
-        return _last_ip
 
-    for i, (pkt, src_ip) in enumerate(results, 1):
-        info = parse_discover_payload(pkt.payload)
-        print(f"  [{i}] {pkt.serial}  ip={src_ip}  epoch={info['epoch']}  "
-              f"fw={info['fw_version']}  provisioned={info['provisioned']}")
-    print("  [0] Type an IP manually")
-
-    choice = input("Pick one: ").strip()
-    if choice == "0":
-        ip = input("IP: ").strip()
-        _last_ip = ip or None
-        return _last_ip
+def resolve_device_by_ip(ip: str) -> tuple[Packet, dict] | None:
+    """Unicasts a DISCOVER straight to a manually-typed IP (for units that
+    didn't answer the broadcast, e.g. a different subnet) to fetch the
+    serial/info the device menu header needs. None if it doesn't respond."""
+    client = AdminClient(ip, DEFAULT_PORT, DEFAULT_TIMEOUT)
     try:
-        idx = int(choice)
-        if 1 <= idx <= len(results):
-            _last_ip = results[idx - 1][1]
-            return _last_ip
-    except ValueError:
-        pass
-    print("Invalid choice.")
-    return None
+        disc = client.discover_one()
+    except socket.timeout:
+        return None
+    return disc, parse_discover_payload(disc.payload)
 
 
-def action_discover() -> None:
-    default_bcast = guess_broadcast_address()
-    broadcast = input(f"Broadcast address [{default_bcast}]: ").strip() or default_bcast
-    do_discover(broadcast)
+def run_action(handler, ip: str) -> None:
+    """Runs one action_* handler against the selected device, keeping the
+    menu alive across the same errors main() used to guard against."""
+    try:
+        handler(ip)
+    except socket.timeout:
+        print("Timed out waiting for the unit's response -- right IP/port? Unit powered and provisioned?")
+    except SystemExit as e:
+        print(f"Error: {e}")
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+    except Exception as e:  # last resort -- keep the menu alive
+        print(f"Unexpected error: {e}")
+
+
+def run_action_noargs(handler) -> None:
+    try:
+        handler()
+    except SystemExit as e:
+        print(f"Error: {e}")
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
 
 
 def action_provision(ip: str) -> None:
@@ -740,6 +819,27 @@ def action_identify(ip: str) -> None:
     do_identify(ip, get_master_secret())
 
 
+def _prompt_ramp_ms() -> int:
+    raw = input(f"Ramp time in ms [{DEFAULT_RAMP_MS}]: ").strip()
+    return int(raw) if raw else DEFAULT_RAMP_MS
+
+
+def action_on(ip: str) -> None:
+    do_on(ip, get_master_secret(), _prompt_ramp_ms())
+
+
+def action_off(ip: str) -> None:
+    do_off(ip, get_master_secret(), _prompt_ramp_ms())
+
+
+def action_dim(ip: str) -> None:
+    percent_raw = input("Brightness percent (0-100): ").strip()
+    if not percent_raw:
+        print("Percent is required.")
+        return
+    do_dim(ip, get_master_secret(), int(percent_raw), _prompt_ramp_ms())
+
+
 def action_reboot(ip: str) -> None:
     do_reboot(ip, get_master_secret())
 
@@ -753,58 +853,124 @@ def action_rotate_key(ip: str) -> None:
     do_rotate_key(ip, get_master_secret(), int(new_epoch_raw) if new_epoch_raw else None)
 
 
-# (label, needs_device, handler) -- handler takes an ip argument iff needs_device is True.
-MENU = {
-    "1": ("Discover devices on the network", False, action_discover),
-    "2": ("Provision a device (CLAIM, over the network)", True, action_provision),
-    "3": ("Derive a key from MAC+epoch (recovery, no device needed)", False, action_derive),
-    "4": ("Status", True, action_status),
-    "5": ("Identify (blink)", True, action_identify),
-    "6": ("Reboot", True, action_reboot),
-    "7": ("Factory reset", True, action_reset),
-    "8": ("Rotate admin key", True, action_rotate_key),
+# (label, handler) -- handler takes the selected device's ip. Built down
+# here, after the action_* functions above are all defined, since these
+# dicts are evaluated at import time.
+INFO_CONTROL_MENU = {
+    "1": ("Status", action_status),
+    "2": ("Identify (blink)", action_identify),
+    "3": ("On", action_on),
+    "4": ("Off", action_off),
+    "5": ("Dim", action_dim),
+}
+ADMINISTRATION_MENU = {
+    "1": ("Reboot", action_reboot),
+    "2": ("Factory reset", action_reset),
+    "3": ("Rotate admin key", action_rotate_key),
 }
 
 
-def print_menu() -> None:
-    print()
-    for key, (label, _, _) in MENU.items():
-        print(f"  {key}) {label}")
-    print("  0) Quit")
-
-
-def main() -> None:
-    print("=== LUM1 luminaire admin tool ===")
+def run_submenu(title: str, items: dict[str, tuple[str, object]], ip: str) -> None:
     while True:
-        print_menu()
-        choice = input("> ").strip()
-
+        print(f"\n  -- {title} --")
+        for key, (label, _) in items.items():
+            print(f"    {key}) {label}")
+        print("    0) Back")
+        choice = input("  > ").strip()
         if choice in ("0", ""):
-            break
-        if choice not in MENU:
+            return
+        if choice not in items:
+            print("  Invalid choice.")
+            continue
+        _, handler = items[choice]
+        run_action(handler, ip)
+
+
+def device_menu(serial: str, ip: str, provisioned: bool) -> None:
+    """The per-luminaire menu: everything you can do to one already-picked
+    unit, grouped into submenus. Re-checks provisioned state after a
+    successful CLAIM so the menu updates without having to reselect."""
+    while True:
+        print(f"\n=== {serial}  ip={ip} ===")
+        if not provisioned:
+            print("  Status: UNPROVISIONED")
+            print("  1) Provision (CLAIM)")
+            print("  0) Back to device list")
+            choice = input("> ").strip()
+            if choice in ("0", ""):
+                return
+            if choice == "1":
+                run_action(action_provision, ip)
+                resolved = resolve_device_by_ip(ip)
+                if resolved is not None:
+                    _, info = resolved
+                    provisioned = info["provisioned"]
+                continue
             print("Invalid choice.")
             continue
 
-        _, needs_device, handler = MENU[choice]
+        print("  Status: provisioned")
+        print("  1) Info & control  (status / identify / on / off / dim)")
+        print("  2) Administration  (reboot / factory reset / rotate key)")
+        print("  0) Back to device list")
+        choice = input("> ").strip()
+        if choice in ("0", ""):
+            return
+        if choice == "1":
+            run_submenu("Info & control", INFO_CONTROL_MENU, ip)
+        elif choice == "2":
+            run_submenu("Administration", ADMINISTRATION_MENU, ip)
+        else:
+            print("Invalid choice.")
+
+
+def main() -> None:
+    print("=== DriverPoE admin tool ===")
+    last_scan: list[tuple[Packet, str]] = []
+    while True:
+        print()
+        if last_scan:
+            print_scan_results(last_scan)
+        else:
+            print("(no scan yet)")
+        print("  [S] Scan the network")
+        print("  [M] Enter a device IP manually")
+        print("  [K] Derive a key from MAC+epoch (recovery, no device needed)")
+        print("  [Q] Quit")
+        choice = input("> ").strip()
+        lowered = choice.lower()
+
+        if choice == "" or lowered == "q":
+            break
+        if lowered == "s":
+            last_scan = scan_devices()
+            continue
+        if lowered == "k":
+            run_action_noargs(action_derive)
+            continue
+        if lowered == "m":
+            ip = input("IP: ").strip()
+            if not ip:
+                continue
+            resolved = resolve_device_by_ip(ip)
+            if resolved is None:
+                print("No response from that IP.")
+                continue
+            disc, info = resolved
+            device_menu(disc.serial, ip, info["provisioned"])
+            continue
+
         try:
-            if needs_device:
-                ip = pick_device()
-                if not ip:
-                    continue
-                handler(ip)
-            else:
-                handler()
-        except socket.timeout:
-            print("Timed out waiting for the unit's response -- right IP/port? Unit powered and provisioned?")
-        except SystemExit as e:
-            # do_* functions raise SystemExit(message) on protocol-level
-            # errors (bad HMAC, refused command, etc) -- print and stay in
-            # the menu instead of exiting the whole tool.
-            print(f"Error: {e}")
-        except KeyboardInterrupt:
-            print("\nCancelled.")
-        except Exception as e:  # last resort -- keep the menu alive
-            print(f"Unexpected error: {e}")
+            idx = int(choice)
+        except ValueError:
+            print("Invalid choice.")
+            continue
+        if not last_scan or not (1 <= idx <= len(last_scan)):
+            print("Invalid choice.")
+            continue
+        pkt, ip = last_scan[idx - 1]
+        info = parse_discover_payload(pkt.payload)
+        device_menu(pkt.serial, ip, info["provisioned"])
 
 
 # ======================================================================= #
@@ -890,7 +1056,7 @@ class TestDeriveAdminKey(unittest.TestCase):
 class TestSerial(unittest.TestCase):
     def test_serial_format(self):
         mac = mac_from_str("A4:CF:12:B9:3D:08")
-        self.assertEqual(serial_from_mac(mac), "LUM1-A4CF12B93D08")
+        self.assertEqual(serial_from_mac(mac), "DriverPoE-A4CF12B93D08")
 
     def test_mac_roundtrip(self):
         for s in ("A4:CF:12:B9:3D:08", "a4-cf-12-b9-3d-08", "A4CF12B93D08"):
@@ -906,7 +1072,7 @@ class TestPacket(unittest.TestCase):
         key = bytes(range(32))
         pkt = Packet(
             type=PacketType.STATUS,
-            serial="LUM1-A4CF12B93D08",
+            serial="DriverPoE-A4CF12B93D08",
             epoch=3,
             nonce=bytes(range(16)),
             payload=b"hello",
@@ -916,7 +1082,7 @@ class TestPacket(unittest.TestCase):
 
         parsed = Packet.unpack(wire)
         self.assertEqual(parsed.type, PacketType.STATUS)
-        self.assertEqual(parsed.serial, "LUM1-A4CF12B93D08")
+        self.assertEqual(parsed.serial, "DriverPoE-A4CF12B93D08")
         self.assertEqual(parsed.epoch, 3)
         self.assertEqual(parsed.nonce, bytes(range(16)))
         self.assertEqual(parsed.payload, b"hello")
@@ -931,14 +1097,14 @@ class TestPacket(unittest.TestCase):
 
     def test_tampered_payload_fails_hmac(self):
         key = bytes(range(32))
-        pkt = Packet(type=PacketType.REBOOT, serial="LUM1-000000000000", epoch=0, nonce=b"\x01" * 16, payload=b"")
+        pkt = Packet(type=PacketType.REBOOT, serial="DriverPoE-000000000000", epoch=0, nonce=b"\x01" * 16, payload=b"")
         wire = bytearray(pkt.pack(hmac_key=key))
         wire[HEADER_SIZE - 1] ^= 0xFF  # corrupt the last byte before the payload (payload_len)
         with self.assertRaises(ValueError):
             Packet.unpack(bytes(wire))
 
     def test_wrong_key_fails_verify(self):
-        pkt = Packet(type=PacketType.STATUS, serial="LUM1-000000000000", epoch=0, nonce=b"", payload=b"x")
+        pkt = Packet(type=PacketType.STATUS, serial="DriverPoE-000000000000", epoch=0, nonce=b"", payload=b"x")
         wire = pkt.pack(hmac_key=bytes(range(32)))
         parsed = Packet.unpack(wire)
         self.assertFalse(parsed.verify_hmac(bytes(range(1, 33))))
@@ -965,9 +1131,18 @@ class TestPacket(unittest.TestCase):
 
 class TestPacketTypes(unittest.TestCase):
     def test_claim_type_values(self):
-        # Must stay in sync with components/poe_luminaire/admin_protocol.h's admin_pkt_type_t.
+        # Must stay in sync with components/admin_channel/admin_protocol.h's admin_pkt_type_t.
         self.assertEqual(PacketType.CLAIM, 0x09)
         self.assertEqual(PacketType.CLAIM_RESP, 0x89)
+
+    def test_on_off_dim_type_values(self):
+        # Must stay in sync with components/admin_channel/admin_protocol.h's admin_pkt_type_t.
+        self.assertEqual(PacketType.ON, 0x0A)
+        self.assertEqual(PacketType.ON_RESP, 0x8A)
+        self.assertEqual(PacketType.OFF, 0x0B)
+        self.assertEqual(PacketType.OFF_RESP, 0x8B)
+        self.assertEqual(PacketType.DIM, 0x0C)
+        self.assertEqual(PacketType.DIM_RESP, 0x8C)
 
 
 class TestHmacVector(unittest.TestCase):

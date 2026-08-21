@@ -1,5 +1,0 @@
-dependencies:
-  # IP101G PHY driver. Used directly through esp_eth_phy_new_ip101() in
-  # eth_init.c — all parameters (GPIOs, SMI address) come from
-  # poe_luminaire.h, nothing is configured through this component's Kconfig.
-  espressif/ip101: "^1.1.0"

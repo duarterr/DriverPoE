@@ -1,4 +1,8 @@
-No poweron, driver está ligando muito cedo. LED vermelho ainda piscando e driver já ligando
-Padronizar comportamento dos LEDs
-Reescrever lumtool para primeiro fazer scan e listar luminárias. Daí seleciona uma e temos todas as opções para essa luminaria. Como diskpar
-Mudar nome do projeto e prefixo das luminarias. Algo como DriverPoe1295 (para a versão normal) e DriverPoE2550 (para a versão poe plus)
+Não resolveu.
+
+Fazer:
+- Reverter para a previsão de OTA mas ainda sem a implementação;
+- Commit no código;
+- Eliminar absolutamente tudo, deixando apenas o negociador e o LED driver.
+- Terminou de negociar, espera 2s e liga o driver de LED.
+- O objetivo é ver se assim o driver de led sempre liga quando o cabo é conectado

@@ -8,9 +8,8 @@
  */
 #include "admin_channel.h"
 #include "admin_protocol.h"
-#include "poe_luminaire.h"
 #include "devid.h"
-#include "poe_negotiator.h"
+#include "tps2378.h"
 #include "hv9910.h"
 #include "eth_init.h"
 #include "voltage_sense.h"
@@ -36,11 +35,16 @@
 static const char *TAG = "ADMIN_CH";
 
 /* ---------------------------------------------------------------------
- * Module tuning parameters (not "board config" — kept here, not in
- * poe_luminaire.h, same pattern as poe_negotiator.c).
+ * Module tuning parameters -- unlike ADMIN_UDP_PORT (board config, now
+ * part of admin_channel_config_t), these are internal implementation
+ * details this module owns outright, same pattern as tps2378.c.
  * --------------------------------------------------------------------- */
 #define TASK_STACK_SIZE          4096
-#define TASK_PRIORITY            (tskIDLE_PRIORITY + 5) /* higher than cmd_server_task (+3) and poe_monitor (+4) */
+#define TASK_PRIORITY            (tskIDLE_PRIORITY + 5) /* higher than tps2378's monitor task (+4) */
+
+/* Board config this module needs -- copied in from admin_channel_start()'s
+ * config argument. */
+static admin_channel_config_t s_config;
 
 #define NONCE_POOL_SIZE          8
 #define NONCE_TTL_US             (10 * 1000000LL)   /* a CHALLENGE nonce expires after 10s if unused */
@@ -51,10 +55,6 @@ static const char *TAG = "ADMIN_CH";
 #define RATE_LIMIT_TABLE_SIZE    16
 #define RATE_LIMIT_WINDOW_US     (1 * 1000000LL)
 #define RATE_LIMIT_MAX_PER_WINDOW 20 /* per source IP, per 1s window */
-
-#define IDENTIFY_TASK_STACK      2048
-#define IDENTIFY_BLINK_CYCLES    6
-#define IDENTIFY_BLINK_PERIOD_MS 400
 
 /* ---------------------------------------------------------------------
  * Big-endian serialization
@@ -171,9 +171,18 @@ typedef struct {
 
 static nonce_slot_t s_nonces[NONCE_POOL_SIZE];
 
-static void nonce_issue(uint8_t out[ADMIN_NONCE_LEN])
+/* Returns false (leaving 'out' untouched -- never issued/inserted into
+ * the pool) if the RNG itself fails. A nonce is security-relevant (it's
+ * what REBOOT/FACTORY_RESET/ROTATE_KEY are gated on), so silently handing
+ * out a possibly-predictable or uninitialized value on an RNG failure
+ * would be worse than just refusing the CHALLENGE. */
+static bool nonce_issue(uint8_t out[ADMIN_NONCE_LEN])
 {
-    psa_generate_random(out, ADMIN_NONCE_LEN);
+    psa_status_t rnd_status = psa_generate_random(out, ADMIN_NONCE_LEN);
+    if (rnd_status != PSA_SUCCESS) {
+        ESP_LOGE(TAG, "psa_generate_random() failed (%d) -- refusing to issue a nonce", (int)rnd_status);
+        return false;
+    }
 
     int64_t now = esp_timer_get_time();
     int victim = 0;
@@ -191,6 +200,7 @@ static void nonce_issue(uint8_t out[ADMIN_NONCE_LEN])
     s_nonces[victim].used = true;
     s_nonces[victim].issued_at_us = now;
     memcpy(s_nonces[victim].nonce, out, ADMIN_NONCE_LEN);
+    return true;
 }
 
 /* Consumes (invalidates) a nonce if it exists in the pool and hasn't
@@ -289,15 +299,25 @@ static void send_packet(int sock, const struct sockaddr_in *dst, admin_pkt_type_
         off += payload_len;
     }
 
+    /* Zeroed first, unconditionally -- the safe default if hmac_compute()
+     * below fails is a packet whose HMAC field is all zero, which is
+     * exactly what an unauthenticated response already sends and will
+     * simply fail verification on the client, instead of leaking whatever
+     * uninitialized stack bytes happened to sit in 'buf' at this offset. */
+    memset(buf + off, 0, ADMIN_HMAC_LEN);
     if (hmac_key) {
         size_t mac_len = 0;
-        hmac_compute(hmac_key, buf, off, buf + off, ADMIN_HMAC_LEN, &mac_len);
-    } else {
-        memset(buf + off, 0, ADMIN_HMAC_LEN);
+        psa_status_t hmac_status = hmac_compute(hmac_key, buf, off, buf + off, ADMIN_HMAC_LEN, &mac_len);
+        if (hmac_status != PSA_SUCCESS) {
+            ESP_LOGE(TAG, "hmac_compute() failed (%d) -- sending type 0x%02x with a zeroed HMAC "
+                          "(will fail verification on the client)", (int)hmac_status, (unsigned)type);
+        }
     }
     off += ADMIN_HMAC_LEN;
 
-    sendto(sock, buf, off, 0, (const struct sockaddr *)dst, sizeof(*dst));
+    if (sendto(sock, buf, off, 0, (const struct sockaddr *)dst, sizeof(*dst)) < 0) {
+        ESP_LOGE(TAG, "sendto() failed for type 0x%02x: errno %d", (unsigned)type, errno);
+    }
 }
 
 static void send_status_resp(int sock, const struct sockaddr_in *dst, const uint8_t nonce[ADMIN_NONCE_LEN],
@@ -314,14 +334,18 @@ static void send_status_resp(int sock, const struct sockaddr_in *dst, const uint
 static void handle_discover(int sock, const parsed_header_t *hdr, const struct sockaddr_in *src)
 {
     /* Short random delay to avoid a collision when several units answer
-     * the same broadcast at once. */
+     * the same broadcast at once -- not security-relevant (unlike
+     * nonce_issue()), so an RNG failure here just means no jitter this
+     * time (r stays 0) rather than refusing to answer DISCOVER at all. */
     uint8_t r = 0;
-    psa_generate_random(&r, 1);
+    if (psa_generate_random(&r, 1) != PSA_SUCCESS) {
+        r = 0;
+    }
     vTaskDelay(pdMS_TO_TICKS(r % 50));
 
     uint8_t payload[41];
     memset(payload, 0, sizeof(payload));
-    strncpy((char *)payload, DEVID_MODEL_PREFIX, 16);
+    strncpy((char *)payload, devid_get_model_prefix(), 16);
     put_u32_be(payload + 16, devid_get_epoch());
 
     const esp_app_desc_t *app = esp_app_get_description();
@@ -340,7 +364,11 @@ static void handle_challenge(int sock, const parsed_header_t *hdr, const struct 
 {
     (void)hdr;
     uint8_t new_nonce[ADMIN_NONCE_LEN];
-    nonce_issue(new_nonce);
+    if (!nonce_issue(new_nonce)) {
+        /* RNG failure -- drop silently, same posture as every other
+         * transient failure on this channel; the client just retries. */
+        return;
+    }
     /* Only ever dispatched for a provisioned unit (CLAIM, the one
      * pre-provisioning command, doesn't need a nonce at all -- see
      * handle_packet()), so the active key is always the right one here. */
@@ -357,11 +385,11 @@ static void handle_status(int sock, const parsed_header_t *hdr, const struct soc
 
     put_u32_be(payload + off, (uint32_t)(esp_timer_get_time() / 1000000)); off += 4;
     payload[off++] = (uint8_t)esp_reset_reason();
-    payload[off++] = poe_negotiator_is_ready() ? 1 : 0;
-    payload[off++] = (uint8_t)poe_negotiator_get_source();
+    payload[off++] = tps2378_is_ready() ? 1 : 0;
+    payload[off++] = (uint8_t)tps2378_get_source();
     payload[off++] = hv9910_is_enabled() ? 1 : 0;
     payload[off++] = hv9910_get_dim_percent();
-    put_u32_be(payload + off, (uint32_t)poe_negotiator_get_vbus_mv()); off += 4;
+    put_u32_be(payload + off, (uint32_t)tps2378_get_vbus_mv()); off += 4;
     put_u32_be(payload + off, (uint32_t)v.led_voltage_mv); off += 4; /* bits reinterpreted as int32_t by the reader */
 
     esp_netif_ip_info_t ip_info;
@@ -374,60 +402,94 @@ static void handle_status(int sock, const parsed_header_t *hdr, const struct soc
     send_packet(sock, src, ADMIN_TYPE_STATUS_RESP, hdr->nonce, payload, (uint16_t)off, devid_get_key());
 }
 
-/* Short, independent task for the IDENTIFY blink so it doesn't block the
- * admin channel task while it runs (a few seconds). Only uses hv9910's
- * existing public API — doesn't change any hardware control logic. */
-static void identify_blink_task(void *arg)
+/* ---------------------------------------------------------------------
+ * ON / OFF / DIM — the admin channel's only replacement for what used to
+ * be the separate text-based TCP command server (now removed; this
+ * authenticated channel is the sole network control surface). Same
+ * semantics/safety rules as that server had, just binary on the wire.
+ * --------------------------------------------------------------------- */
+static void handle_on(int sock, const parsed_header_t *hdr,
+                       const uint8_t *payload, uint16_t payload_len,
+                       const struct sockaddr_in *src)
 {
-    (void)arg;
-    bool was_enabled = hv9910_is_enabled();
-    uint8_t was_dim = hv9910_get_dim_percent();
-
-    if (!was_enabled) {
-        /* hv9910_set_dim() alone only changes the PWM duty (DIM pin) -- it
-         * never touches SHUTDOWN. Without releasing it here, blinking
-         * while the driver was off (the common case, e.g. right after
-         * boot with nothing turned on yet) would silently produce no
-         * visible light at all. ramp_ms=0 and persist=false -- this is a
-         * transient blink, not the operator asking for the driver to stay
-         * on, so it must NOT change the remembered on/off state, and
-         * shouldn't fade in before the blink even starts. */
-        hv9910_enable(0, false);
+    if (payload_len != 4) {
+        send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_ON_RESP, ADMIN_STATUS_ERR_BAD_ARG, devid_get_key());
+        return;
     }
-
-    /* Ramp=0 (instant) on purpose here -- this is meant to read as a
-     * sharp, unmistakable blink for physical identification, not a soft
-     * fade like a normal dimming change. */
-    for (int i = 0; i < IDENTIFY_BLINK_CYCLES; i++) {
-        hv9910_set_dim(0, 0);
-        vTaskDelay(pdMS_TO_TICKS(IDENTIFY_BLINK_PERIOD_MS));
-        hv9910_set_dim(100, 0);
-        vTaskDelay(pdMS_TO_TICKS(IDENTIFY_BLINK_PERIOD_MS));
+    if (!tps2378_is_ready()) {
+        send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_ON_RESP, ADMIN_STATUS_ERR_NOT_READY, devid_get_key());
+        return;
     }
+    uint32_t ramp_ms = get_u32_be(payload);
+    hv9910_enable(ramp_ms, true); /* true: genuine operator intent, persist */
+    send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_ON_RESP, ADMIN_STATUS_OK, devid_get_key());
+}
 
-    /* Restore exactly the prior state -- persist=false, same reasoning as
-     * above: this transient blink leaves the remembered on/off state
-     * exactly as it was. */
-    if (was_enabled) {
-        hv9910_set_dim(was_dim, 0);
+static void handle_off(int sock, const parsed_header_t *hdr,
+                        const uint8_t *payload, uint16_t payload_len,
+                        const struct sockaddr_in *src)
+{
+    if (payload_len != 4) {
+        send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_OFF_RESP, ADMIN_STATUS_ERR_BAD_ARG, devid_get_key());
+        return;
+    }
+    uint32_t ramp_ms = get_u32_be(payload);
+    hv9910_disable(ramp_ms, true); /* true: genuine operator intent, persist */
+    send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_OFF_RESP, ADMIN_STATUS_OK, devid_get_key());
+}
+
+static void handle_dim(int sock, const parsed_header_t *hdr,
+                        const uint8_t *payload, uint16_t payload_len,
+                        const struct sockaddr_in *src)
+{
+    if (payload_len != 5 || payload[0] > 100) {
+        send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DIM_RESP, ADMIN_STATUS_ERR_BAD_ARG, devid_get_key());
+        return;
+    }
+    uint8_t percent = payload[0];
+    uint32_t ramp_ms = get_u32_be(payload + 1);
+
+    if (percent == 0) {
+        /* hv9910_disable() ramps the brightness to 0 itself and only cuts
+         * SHUTDOWN once that finishes -- one call does the whole thing, no
+         * separate hv9910_set_dim() needed here (calling both would start
+         * two fades back to back, which classic ESP32's LEDC can't do --
+         * see hv9910_set_dim()'s comment). */
+        if (hv9910_is_enabled()) {
+            hv9910_disable(ramp_ms, true);
+        }
     } else {
-        hv9910_disable(0, false);
+        /* DIM > 0 while the driver is off turns it on FIRST, with
+         * ramp_ms=0 -- an instant release that takes the non-fade code
+         * path in hv9910_set_dim() and never touches the LEDC fade
+         * hardware, so it can't collide with the real ramp requested here.
+         * Exactly ONE fade ever starts, using the caller's actual ramp_ms.
+         * If the PoE/AUX gate refuses, the brightness is still
+         * recorded/persisted so it's ready to apply whenever the driver is
+         * allowed to turn on -- same behavior as before, no error here. */
+        if (!hv9910_is_enabled() && tps2378_is_ready()) {
+            hv9910_enable(0, true);
+        }
+        hv9910_set_dim(percent, ramp_ms);
     }
-
-    vTaskDelete(NULL);
+    send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DIM_RESP, ADMIN_STATUS_OK, devid_get_key());
 }
 
 static void handle_identify(int sock, const parsed_header_t *hdr, const struct sockaddr_in *src)
 {
-    /* Same safety rule as ON/DIM in cmd_server.c: never force the driver
-     * to run outside the PoE/AUX/VBUS gate. */
-    if (!poe_negotiator_is_ready()) {
+    /* Same safety rule as ON/DIM above: never force the driver to run
+     * outside the PoE/AUX/VBUS gate. */
+    if (!tps2378_is_ready()) {
         send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_IDENTIFY_RESP, ADMIN_STATUS_ERR_NOT_READY, devid_get_key());
         return;
     }
 
     send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_IDENTIFY_RESP, ADMIN_STATUS_OK, devid_get_key());
-    xTaskCreate(identify_blink_task, "identify_blink", IDENTIFY_TASK_STACK, NULL, tskIDLE_PRIORITY + 2, NULL);
+    /* The blink sequence itself now runs entirely inside hv9910's own
+     * command-queue task, not a separate task here -- see hv9910.h. That's
+     * what lets a real ON/OFF/DIM (or the PoE-loss emergency cutoff)
+     * preempt an in-progress blink instead of racing it. */
+    hv9910_identify();
 }
 
 /* Formats the source IPv4 for logging without depending on inet_ntoa()
@@ -662,6 +724,15 @@ static void handle_packet(int sock, uint8_t *buf, size_t len, const struct socka
     case ADMIN_TYPE_IDENTIFY:
         handle_identify(sock, &hdr, src);
         break;
+    case ADMIN_TYPE_ON:
+        handle_on(sock, &hdr, payload, hdr.payload_len, src);
+        break;
+    case ADMIN_TYPE_OFF:
+        handle_off(sock, &hdr, payload, hdr.payload_len, src);
+        break;
+    case ADMIN_TYPE_DIM:
+        handle_dim(sock, &hdr, payload, hdr.payload_len, src);
+        break;
     case ADMIN_TYPE_REBOOT:
         handle_reboot(sock, &hdr, src);
         break;
@@ -708,7 +779,7 @@ static void admin_channel_task(void *arg)
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port = htons(ADMIN_UDP_PORT);
+    addr.sin_port = htons(s_config.port);
 
     if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
         ESP_LOGE(TAG, "bind() failed: errno %d", errno);
@@ -718,7 +789,7 @@ static void admin_channel_task(void *arg)
     }
 
     ESP_LOGI(TAG, "Admin channel listening on UDP:%u (serial %s, provisioned=%d)",
-             ADMIN_UDP_PORT, devid_get_serial(), devid_is_provisioned());
+             s_config.port, devid_get_serial(), devid_is_provisioned());
 
     static uint8_t rx_buf[ADMIN_MAX_PACKET];
     while (1) {
@@ -736,7 +807,14 @@ static void admin_channel_task(void *arg)
     }
 }
 
-void admin_channel_start(void)
+void admin_channel_start(const admin_channel_config_t *config)
 {
-    xTaskCreate(admin_channel_task, "admin_channel", TASK_STACK_SIZE, NULL, TASK_PRIORITY, NULL);
+    /* Copied, not just pointer-retained -- config doesn't need to stay
+     * valid after this call returns (see admin_channel.h). */
+    s_config = *config;
+
+    BaseType_t ok = xTaskCreate(admin_channel_task, "admin_channel", TASK_STACK_SIZE, NULL, TASK_PRIORITY, NULL);
+    if (ok != pdPASS) {
+        ESP_LOGE(TAG, "xTaskCreate(admin_channel) failed -- the admin channel will not run");
+    }
 }

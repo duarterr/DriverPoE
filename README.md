@@ -1,14 +1,14 @@
 | Supported Targets | ESP32 |
 | ----------------- | ----- |
 
-# Luminária PoE — firmware mínimo
+# DriverPoE — firmware mínimo
 
 Firmware mínimo para uma luminária alimentada por PoE, construído sobre:
 
 - **ESP32** (EMAC interno)
 - **IP101G** — PHY Ethernet via RMII
 - **TPS2378** — negociador/interface PoE (IEEE 802.3at, PD)
-- **HV9910** — driver de LED (buck, dimerização por PWM)
+- **HV9910** — driver de LED (buck, dimerização por PWM filtrado no LDIM)
 
 ## Comportamento
 
@@ -18,7 +18,7 @@ Firmware mínimo para uma luminária alimentada por PoE, construído sobre:
    esteja legível assim que o gate de PoE/AUX começar a avaliá-lo.
 3. O firmware passa a monitorar os pinos **CDB** e **T2P** do TPS2378,
    cruzados com a tensão medida do barramento DC (**VBUS**, lida via
-   `ADC_VLED_P`). O sistema é considerado "pronto" (seguro para operar)
+   `ADC_CH_VLED_P`). O sistema é considerado "pronto" (seguro para operar)
    quando **ambos**:
    - Uma fonte digital é confirmada — **ou**:
      - **PoE OK** — CDB confirma que uma fonte PoE real foi negociada e o
@@ -30,33 +30,86 @@ Firmware mínimo para uma luminária alimentada por PoE, construído sobre:
        jusante, para testes sem uma fonte PoE real) está acima de ~40V e
        força o pino APD do TPS2378 para alto.
    - **E o VBUS confirma** — a tensão DC medida do barramento está acima
-     de `VBUS_MIN_MV` (padrão 40V, `components/poe_luminaire/poe_luminaire.h`). CDB/T2P são só
+     de `VBUS_MIN_MV` (padrão 40V, `main/poe_luminaire_main.h`). CDB/T2P são só
      sinais digitais de handshake; VBUS é a checagem final de que o
      barramento está de fato saudável antes de confiar o driver de LED
-     pra rodar.
+     pra rodar. Cada leitura de VBUS usada nessa decisão já é a mediana de
+     3 amostras rápidas do ADC (rejeita uma amostra isolada com ruído,
+     antes mesmo do debounce), e o limiar tem histerese: `VBUS_MIN_MV`
+     pra **entrar** em "ok", um limiar `VBUS_HYSTERESIS_MV` mais baixo pra
+     **sair** — sem isso, uma leitura em cima da hora (~40V) faria o
+     veredito oscilar a cada ruído pequeno do barramento. CDB, T2P e o
+     veredito de VBUS (já com a histerese acima) continuam todos passando
+     por debounce temporal (5 leituras estáveis) antes de contar como
+     confirmados — ver `components/tps2378/tps2378.c`.
 
    Enquanto **qualquer** um dos requisitos falhar ("modo de baixo
-   consumo"), o **LED indicador 2 (vermelho, GPIO12)** pisca e o driver de
-   LED fica travado — inclusive se a condição combinada cair de novo
-   depois de já ter estado OK (perda de energia, AUX removido, VBUS
-   caindo, sobrecarga térmica, renegociação), o firmware corta o driver
-   imediatamente. Veja [components/poe_luminaire/poe_negotiator.h](components/poe_luminaire/poe_negotiator.h) para
-   a lógica completa e o raciocínio.
+   consumo"), o driver de LED fica travado — inclusive se a condição
+   combinada cair de novo depois de já ter estado OK (perda de energia,
+   AUX removido, VBUS caindo, sobrecarga térmica, renegociação), o
+   firmware corta o driver imediatamente (`hv9910_emergency_disable()` —
+   ver "Persistência de brilho" abaixo pra por que essa chamada é
+   diferente de um `OFF` comum). Veja
+   [components/tps2378/tps2378.h](components/tps2378/tps2378.h) para a lógica completa e
+   o raciocínio, e "LEDs indicadores" abaixo pro que aparece nos dois LEDs
+   da placa enquanto isso.
 4. Assim que o sistema fica pronto, o firmware:
    - inicializa o PHY IP101G e sobe a pilha Ethernet (cliente DHCP por
-     padrão, via `esp_netif`/lwIP);
-   - inicia um servidor de comandos TCP (porta configurável, padrão 5000);
-   - inicia o canal de administração UDP autenticado (porta configurável,
-     padrão 5001) — ver seção própria abaixo.
-5. A partir daí, comandos recebidos pela rede podem ligar/desligar o
-   driver, ajustar o brilho e ler tensões/estado.
+     padrão, via `esp_netif`/lwIP) — a criação do MAC/PHY/driver/netif é
+     tentada de novo, com backoff, até 5 vezes se falhar (sem reiniciar o
+     dispositivo pra tentar de novo — ver `components/eth_init/eth_init.c`);
+   - só se essa tentativa realmente funcionar, inicia o canal de
+     administração UDP autenticado (porta configurável, padrão 5001) —
+     ver seção própria abaixo. Se todas as tentativas de subir a Ethernet
+     falharem, o canal de administração **não** é iniciado (não faria
+     sentido sem pilha de rede) e o dispositivo continua rodando
+     normalmente todo o resto (PoE, driver, LEDs indicadores) — só fica
+     inacessível pela rede até o próximo boot.
+5. A partir daí, comandos autenticados recebidos pela rede podem
+   ligar/desligar o driver, ajustar o brilho e ler tensões/estado.
 
-Veja [components/poe_luminaire/poe_luminaire.h](components/poe_luminaire/poe_luminaire.h) para o mapa de pinos completo
-e para **todo parâmetro de configuração da aplicação** (porta TCP,
-polaridades do HV9910, frequência de PWM, endereço do PHY, razão do
-divisor de tensão) — tudo como `#define`s, deliberadamente sem nada no
-Kconfig/menuconfig. Pra mudar qualquer um desses valores, edite
-`poe_luminaire.h` e recompile.
+Veja [main/poe_luminaire_main.h](main/poe_luminaire_main.h) para o mapa de pinos completo
+e para **todo parâmetro de configuração da aplicação** (porta UDP do canal
+de administração, polaridades do HV9910, frequência de PWM, endereço do
+PHY, razão do divisor de tensão) — tudo como `#define`s, deliberadamente
+sem nada no Kconfig/menuconfig. Pra mudar qualquer um desses valores,
+edite `poe_luminaire_main.h` e recompile.
+
+## LEDs indicadores
+
+Duas luzes indicadoras na placa, cada uma resolvendo um pisca-pisca
+diferente do que aparece na carga de LED de verdade (essa é controlada
+pelo HV9910, cuja API o `components/hv9910/hv9910.[ch]` já expõe —
+ver "Persistência de brilho" abaixo). São GPIOs de lógica direta e
+simples (HIGH = aceso), sem PWM nem inversão nenhuma — ao contrário do
+pino DIMMING do HV9910:
+
+| LED | Pino | Significado |
+|---|---|---|
+| **Azul** | GPIO14 (`PIN_LED_BLUE`) | Energia/tensão. Acende assim que o firmware inicializa esse módulo (não espera a negociação de PoE terminar) e fica sólido assim que o VBUS é confirmado; pisca enquanto isso não acontece — cobre tanto "sem energia nenhuma" quanto "fonte digital (CDB/T2P) confirmada mas o barramento ainda está baixo demais". |
+| **Vermelho** | GPIO12 (`PIN_LED_RED`) | Estado do driver HV9910. Aceso enquanto o driver está habilitado (qualquer brilho — um LED indicador simples não mostra nível de dimerização, então "10%" e "100%" aparecem os dois como aceso), apagado enquanto desabilitado. Reservado para o futuro: piscar pra sinalizar falha na fita/string de LED, uma vez que essa detecção exista (**ainda não implementada**). |
+
+Toda essa lógica mora sozinha em
+[components/status_leds/status_leds.c](components/status_leds/status_leds.c) — é o único lugar do firmware
+que decide o que os LEDs devem mostrar. Nenhum outro módulo (`hv9910`,
+`tps2378`, `eth_init`, ...) toca `PIN_LED_BLUE`/`PIN_LED_RED`
+diretamente — cada um deles já tem seu próprio trabalho, e "o que os
+LEDs indicadores significam" não é responsabilidade de nenhum deles.
+
+`status_leds` não depende de nenhum outro componente em tempo de
+compilação (nem inclui `tps2378.h`/`hv9910.h`): quem sabe o que
+"energia ok" e "driver ligado" significam é o `main`, que passa isso
+como ponteiros de função (`power_ok_fn`/`driver_on_fn` em
+`status_leds_config_t`) na hora do `status_leds_init()`. É essa
+inversão que permite `status_leds_init()` ser a primeiríssima coisa
+que `app_main()` faz — antes até de `hv9910_init()`/`tps2378_init()` —
+pra o azul acender assim que o firmware sobe, como indicação de "ESP
+ligado". Os ponteiros só precisam ser válidos quando a task de
+`status_leds` de fato os chamar (nesse caso `tps2378_vbus_confirmed()`
+e `hv9910_is_enabled()`), não no momento em que são passados — e como
+os getters desses dois módulos são só leitura de uma variável estática
+que já nasce `false`, o comportamento antes dos respectivos `_init()`
+rodarem já é o correto (azul piscando, vermelho apagado).
 
 ## Relato de energia PoE / AUX
 
@@ -87,50 +140,6 @@ adicionalmente que o VBUS esteja acima de `VBUS_MIN_MV` (`vbus_ok=1` em
 medida do barramento não confirma isso (barramento caindo, falha de
 fiação, etc) — confira `vbus_mv` nesse caso.
 
-## Protocolo de comandos (TCP, texto)
-
-Uma linha de texto por comando, terminada por `\n` (um `\r` opcional logo
-antes é ignorado). Conecte com `netcat`/`telnet`/`ncat` na porta
-configurada (padrão `5000`):
-
-```
-$ nc <ip-da-luminaria> 5000
-PING
-OK PONG
-STATUS
-OK STATUS poe_ready=1 poe_source=type2 poe_power_w=25.50 cdb_raw=1 cdb_ok=1 t2p_raw=1 t2p_ok=1 vbus_ok=1 driver_on=0 dim=0 dim_last=50 vbus_mv=48200 led_voltage_mv=3100 eth_ip=192.168.1.50 uptime_s=42
-ON
-OK ON 250ms
-DIM 100 100
-OK DIM 100 100ms
-DIM 0 0
-OK DIM 0 0ms
-OFF
-OK OFF 250ms
-```
-
-| Comando                  | Efeito                                                                |
-| ------------------------- | ---------------------------------------------------------------------|
-| `PING`                    | `OK PONG`                                                             |
-| `HELP`                    | Lista de comandos                                                     |
-| `STATUS`                  | Estado atual: fonte e potência PoE/AUX, CDB/T2P/VBUS crus e debounced, driver, dimerização, tensões, IP |
-| `ON [rampa_ms]`           | Habilita o HV9910, subindo até o último brilho ao longo de `rampa_ms` milissegundos (padrão: rampa da placa; recusado com `ERR POE_NOT_READY` a menos que PoE ou AUX esteja confirmado) |
-| `OFF [rampa_ms]`          | Desce o brilho até apagar ao longo de `rampa_ms` milissegundos (padrão: rampa da placa; `0` = instantâneo) |
-| `DIM <0-100> [rampa_ms]`  | Faz a transição de brilho (%) até o alvo ao longo de `rampa_ms` milissegundos (inteiro, ex. `100`). Se omitido, usa a rampa padrão da placa (`HV9910_DEFAULT_RAMP_MS`, 250ms); `0` = instantâneo. `DIM 0` também desabilita o driver assim que a rampa termina; `DIM >0` também habilita se estava desligado (mesmo gate de PoE/AUX do `ON`) |
-
-Campos do `STATUS` explicados:
-
-| Campo | Significado |
-| ----- | ------- |
-| `cdb_raw` / `t2p_raw` | Leituras instantâneas de GPIO, sem debounce — podem mostrar glitches transitórios |
-| `cdb_ok` / `t2p_ok`   | Valores com debounce (confirmados) — no que `poe_source` realmente se baseia |
-| `vbus_ok`             | Veredito com debounce de "VBUS acima do limiar" — `poe_ready = (cdb_ok ou t2p_ok) e vbus_ok` |
-| `vbus_mv`             | Leitura ao vivo da tensão do barramento DC, em mV (= LEDVP escalado) — compare com `VBUS_MIN_MV` em `components/poe_luminaire/poe_luminaire.h` |
-| `dim`                 | Brilho atual ao vivo (0 enquanto o driver está desligado) |
-| `dim_last`            | Brilho lembrado que `ON`/`DIM >0` vai retomar, persistido em NVS |
-
-O servidor atende uma conexão por vez (mínimo, de propósito).
-
 ## Persistência de brilho e estado ligado/desligado
 
 Dois valores são salvos na NVS (namespace `hv9910`) toda vez que mudam,
@@ -143,41 +152,66 @@ e recarregados no boot:
   ainda, é tratado como desligado (nunca liga sozinho numa unidade
   virgem).
 
-### API simples, três funções
+### API, e por que ela é segura de chamar de qualquer task
 
-`components/poe_luminaire/hv9910.c` expõe só três funções pra tudo:
+`components/hv9910/hv9910.c` expõe estas funções:
 
 | Função | Faz |
 |---|---|
 | `hv9910_enable(ramp_ms, persist)` | Libera o `SHUTDOWN` e sobe até o brilho lembrado, ao longo de `ramp_ms` |
 | `hv9910_disable(ramp_ms, persist)` | Desce o brilho até 0 ao longo de `ramp_ms`, só então trava o `SHUTDOWN` |
+| `hv9910_emergency_disable()` | Igual a `hv9910_disable(0, false)`, mas fura a fila de comandos — só o corte de segurança do `tps2378` usa essa |
 | `hv9910_set_dim(percent, ramp_ms)` | Muda só o brilho, não mexe no `SHUTDOWN` |
+| `hv9910_identify()` | Pisca algumas vezes e restaura o estado anterior — usada pelo `IDENTIFY` do canal admin |
 
-`ramp_ms = 0` em qualquer uma das três significa instantâneo. O `persist`
-de `enable`/`disable` controla só se o novo estado ligado/desligado é
-gravado na NVS (chave `on`, namespace `hv9910`) — `true` quando é
-intenção real do operador (`ON`, `OFF`, `DIM` ligando/desligando o
-driver, que deve sobreviver a reinícios e quedas de energia); `false`
-para mudanças transitórias que não devem redefinir "o que o operador
-quer" — o corte de segurança do `poe_negotiator` quando a energia cai, o
-religamento automático quando ela volta, e o pisca-pisca temporário do
-`IDENTIFY`.
+`ramp_ms = 0` nas que aceitam esse parâmetro significa instantâneo;
+qualquer valor maior que `HV9910_MAX_RAMP_MS` (`poe_luminaire_main.h`, `10000`
+= 10s) é cortado nesse teto — existe pra um `ramp_ms` absurdo (um pacote
+malformado, um bug futuro do lado do host) nunca virar uma rampa ou uma
+espera efetivamente sem fim. O `persist` de `enable`/`disable` controla
+só se o novo estado ligado/desligado é gravado na NVS (chave `on`,
+namespace `hv9910`) — `true` quando é intenção real do operador (`ON`,
+`OFF`, `DIM` ligando/desligando o driver, que deve sobreviver a
+reinícios e quedas de energia); `false` para mudanças transitórias que
+não devem redefinir "o que o operador quer" — o corte de segurança do
+`tps2378` quando a energia cai, o religamento automático quando
+ela volta, e o pisca-pisca temporário do `IDENTIFY`.
 
 **Por que o `persist` importa de verdade**: se o corte de segurança por
 queda de PoE gravasse "desligado" toda vez que dispara, o religamento
 automático nunca funcionaria depois de uma queda de energia real — a
 própria queda apagaria a memória de "estava ligado" um instante antes de
-precisar dela. Por isso `poe_negotiator.c` chama
-`hv9910_disable(0, false)` no corte (instantâneo, não grava) e
+precisar dela. Por isso `tps2378.c` chama `hv9910_emergency_disable()`
+no corte (instantâneo, não grava, e fura a fila — ver abaixo) e
 `hv9910_enable(HV9910_DEFAULT_RAMP_MS, false)` no religamento (rampa
 padrão, não grava — só está restaurando um estado que já foi gravado
 antes, não criando intenção nova).
+
+**Concorrência**: toda operação física de GPIO/LEDC do HV9910 acontece
+numa única task interna a `hv9910.c`, dirigida por uma fila de comandos —
+nenhum outro módulo (`tps2378`, `admin_channel`, `status_leds`)
+toca o hardware do driver diretamente. As funções acima só empacotam um
+comando e devolvem o controle na hora; é isso que torna seguro chamá-las
+de qualquer task (a task de monitoramento do `tps2378`, a task do
+canal admin, ...) sem duas delas colidirem no mesmo registro do LEDC ou
+pisarem no mesmo estado interno. Um comando novo sempre cancela o que a
+task estava esperando terminar (um `SHUTDOWN` adiado de um `OFF` com
+rampa, ou o próximo passo de um `IDENTIFY` em andamento) antes de agir —
+é assim que um `OFF` com rampa seguido de um `ON` não desliga a luminária
+de novo mais tarde por causa de uma espera antiga, e que um `ON`/`OFF`/`DIM`
+real interrompe um `IDENTIFY` no meio do pisca-pisca em vez de
+competir com ele pelo mesmo hardware. `hv9910_emergency_disable()`
+existe à parte porque a perda de energia PoE/AUX precisa preemptar
+qualquer backlog de comandos (inclusive um `IDENTIFY` de vários segundos)
+em vez de esperar a vez — ela entra na FRENTE da fila, não no fim; veja
+os comentários em `hv9910.c` (`hv9910_task()`) para os detalhes de
+implementação.
 
 `hv9910_enable()` sempre reaplica o brilho lembrado (chave `dim`) antes
 de liberar o `SHUTDOWN`, então o driver nunca volta apagado. Um
 dispositivo novo, sem nada salvo ainda, usa 100% de brilho por padrão e
 começa desligado (nunca liga sozinho numa unidade virgem). Veja
-[components/poe_luminaire/hv9910.h](components/poe_luminaire/hv9910.h) para a API completa e o raciocínio de cada
+[components/hv9910/hv9910.h](components/hv9910/hv9910.h) para a API completa e o raciocínio de cada
 função. Isso usa a partição `nvs` já declarada em
 [partitions.csv](partitions.csv).
 
@@ -188,9 +222,12 @@ Toda rampa é feita pelo próprio hardware do LEDC
 `LEDC_FADE_NO_WAIT`) — não é um laço de software indo passo a passo,
 então não bloqueia a task que chamou nem consome CPU durante a rampa.
 `ramp_ms` é sempre em milissegundos, a unidade nativa do periférico —
-inclusive na porta de texto (`DIM <0-100> [rampa_ms]`, `ON [rampa_ms]`,
-`OFF [rampa_ms]`), sem conversão nenhuma no meio do caminho. Se omitida,
-usa `HV9910_DEFAULT_RAMP_MS` (`components/poe_luminaire/poe_luminaire.h`, `250`).
+inclusive nos comandos `ON`/`OFF`/`DIM` do canal de administração (campo
+`ramp_ms` de 4 bytes no payload, big-endian), sem conversão nenhuma no
+meio do caminho. Veja "Payloads por tipo" mais abaixo para o formato
+exato de cada um. O padrão sugerido pelas ferramentas quando o operador
+não informa um valor é `HV9910_DEFAULT_RAMP_MS`
+(`main/poe_luminaire_main.h`, `250`).
 
 `IDENTIFY` (canal admin) continua piscando com rampa zero (instantâneo)
 nas duas transições, de propósito — o objetivo ali é um pisca-pisca
@@ -211,14 +248,17 @@ segunda "sumir"** — foi exatamente o bug que causou `DIM 100 <qualquer
 rampa>` parecer instantâneo quando o driver estava desligado, numa
 versão anterior deste código.
 
-A correção é nunca disparar duas rampas seguidas no mesmo canal, sem
-precisar de nenhuma função extra: quando o `DIM` do `cmd_server.c`
-precisa ligar o driver a partir de desligado com um alvo específico, ele
-chama `hv9910_enable(0, true)` — `ramp_ms=0` faz isso passar pelo
-caminho instantâneo (que nunca toca o hardware de fade), então não
-compete com a rampa de verdade que vem logo em seguida via
-`hv9910_set_dim(valor, rampa_ms)`. Só uma rampa é disparada por comando,
-sempre.
+A correção é nunca disparar duas rampas seguidas no mesmo canal. Duas
+coisas garantem isso hoje: primeiro, toda chamada que efetivamente toca o
+hardware do LEDC roda dentro da única task interna de `hv9910.c` (ver
+"Concorrência" acima) — não existe mais nenhum outro código em lugar
+nenhum do firmware que possa disparar uma rampa concorrente. Segundo,
+quando o `DIM` do canal admin precisa ligar o driver a partir de
+desligado com um alvo específico, ele ainda chama `hv9910_enable(0, true)`
+primeiro — `ramp_ms=0` faz isso passar pelo caminho instantâneo (que
+nunca toca o hardware de fade), então não compete com a rampa de verdade
+que vem logo em seguida via `hv9910_set_dim(valor, rampa_ms)`. Só uma
+rampa é disparada por comando, sempre.
 
 ## Identidade do dispositivo
 
@@ -286,8 +326,8 @@ problema:
 Com isso resolvido, os detalhes técnicos de cada peça:
 
 Cada unidade recebe um **serial** determinístico
-(`"LUM1-<12 hex do MAC base>"`, ex. `LUM1-A4CF12B93D08`) e uma **chave de
-administração** de 32 bytes, ambos tratados por `components/poe_luminaire/devid.h`/`components/poe_luminaire/devid.c`:
+(`"DriverPoE-<12 hex do MAC base>"`, ex. `DriverPoE-A4CF12B93D08`) e uma **chave de
+administração** de 32 bytes, ambos tratados por `components/devid/devid.h`/`components/devid/devid.c`:
 
 - O serial **nunca é gravado na flash** — é recalculado a cada boot a
   partir do MAC base do eFuse (`esp_efuse_mac_get_default()`), então não
@@ -369,7 +409,7 @@ implementada aqui.
 A etapa de produção que grava a chave de admin real (derivada do segredo
 mestre) não precisa de conexão serial — pode acontecer inteiramente pela
 rede, logo depois do primeiro boot com o firmware de fábrica, através do
-comando `CLAIM` (`components/poe_luminaire/admin_channel.c`).
+comando `CLAIM` (`components/admin_channel/admin_channel.c`).
 
 `CLAIM` é **deliberadamente não autenticado** — o mesmo nível de
 `DISCOVER`, sem HMAC, sem nonce, sem envelope cifrado nenhum. Isso não é
@@ -380,7 +420,7 @@ proteger a chave temporária", sem ganhar segurança real (um valor fixo
 commitado no repositório é, por definição, público). A proteção de
 verdade é outra: o dispositivo só aceita `CLAIM` **enquanto
 `devid_is_provisioned() == false`** (`devid_claim()` em
-`components/poe_luminaire/devid.c`). O fluxo inteiro é uma única troca:
+`components/devid/devid.c`). O fluxo inteiro é uma única troca:
 
 ```
 Cliente -> Dispositivo : CLAIM (payload=chave_real[32] || epoch=0[4], sem autenticação)
@@ -409,24 +449,28 @@ seguinte é aceito, não importa de onde venha.
 
 ## Canal de administração (UDP, autenticado)
 
-`components/poe_luminaire/admin_channel.c` roda numa task FreeRTOS própria (prioridade mais
-alta que `cmd_server_task`, sem locks/estado compartilhado com
-`poe_negotiator`/`cmd_server`), escutando na porta UDP `ADMIN_UDP_PORT`
-(`components/poe_luminaire/poe_luminaire.h`, padrão `5001`). Ele existe para descoberta e
-recuperação remota quando a luminária está instalada no teto, sem acesso
-físico/serial — `DISCOVER` (sem autenticação), `CLAIM` (também sem
-autenticação; só aceito em unidades ainda não provisionadas — ver seção
-acima), `CHALLENGE`, `STATUS`, `IDENTIFY` (pisca a carga de LED de
-verdade — recusa se `poe_negotiator_is_ready()` for falso, mesma regra
+`components/admin_channel/admin_channel.c` roda numa task FreeRTOS
+própria (prioridade mais alta que a task de monitoramento do
+`tps2378`, sem locks/estado compartilhado com ele), escutando na
+porta UDP `ADMIN_UDP_PORT` (`main/poe_luminaire_main.h`,
+padrão `5001`). Este é o **único ponto de controle pela rede** que o
+firmware expõe — não existe mais um servidor de comandos TCP separado;
+tudo, desde ligar/desligar a luminária até recuperação remota, passa por
+aqui, autenticado. Comandos: `DISCOVER` (sem autenticação), `CLAIM`
+(também sem autenticação; só aceito em unidades ainda não provisionadas —
+ver seção acima), `CHALLENGE`, `STATUS`, `ON`/`OFF`/`DIM` (controle do
+driver de LED, com rampa — mesma lógica que existia no antigo servidor
+TCP, ver "Payloads por tipo" abaixo), `IDENTIFY` (pisca a carga de LED de
+verdade — recusa se `tps2378_is_ready()` for falso, mesma regra
 que `ON`/`DIM` já seguem), `REBOOT`, `FACTORY_RESET`, e um
 `ROTATE_KEY`/`ROTATE_CONFIRM` em duas fases que não consegue tijolar uma
 unidade (uma rotação não confirmada simplesmente expira e a chave antiga
 continua funcionando).
 
-Como o servidor de comandos TCP, este canal depende da pilha de rede
-estar de pé, que continua condicionada à condição "pronto" de
-PoE/AUX/VBUS — então ele cobre *a aplicação travar depois de energizada*,
-não *a luminária nunca ter recebido energia suficiente*.
+Este canal depende da pilha de rede estar de pé, que continua
+condicionada à condição "pronto" de PoE/AUX/VBUS — então ele cobre *a
+aplicação travar depois de energizada*, não *a luminária nunca ter
+recebido energia suficiente*.
 
 ### Formato do pacote
 
@@ -436,7 +480,7 @@ variável):
 
 | Offset | Tamanho | Campo         | Descrição |
 |-------:|-----:|---------------|-------------|
-| 0      | 4    | `magic`       | `0x4C554D31` ("LUM1") |
+| 0      | 4    | `magic`       | `0x44504F45` ("DPOE") |
 | 4      | 1    | `version`     | `1` |
 | 5      | 1    | `type`        | ver tabela de tipos |
 | 6      | 24   | `serial`      | ASCII, preenchido com zeros; ignorado em `DISCOVER`/`DISCOVER_RESP` |
@@ -473,6 +517,12 @@ O bit `0x80` marca "isto é uma resposta" (`REQ | 0x80 = RESP correspondente`).
 | `0x88` | `ROTATE_CONFIRM_RESP` | Sim (chave já ativa, pós-commit) | — |
 | `0x09` | `CLAIM` | Não (só aceito se ainda não provisionado — ver seção acima) | Não |
 | `0x89` | `CLAIM_RESP` | Não | — |
+| `0x0A` | `ON` | Sim | — |
+| `0x8A` | `ON_RESP` | Sim | — |
+| `0x0B` | `OFF` | Sim | — |
+| `0x8B` | `OFF_RESP` | Sim | — |
+| `0x0C` | `DIM` | Sim | — |
+| `0x8C` | `DIM_RESP` | Sim | — |
 | `0xFF` | `ERR_RESP` | Sim | — |
 
 ### Validação (lado do dispositivo), nesta ordem, descartando em silêncio na primeira falha
@@ -509,7 +559,7 @@ acima disso, também descartado em silêncio.
 
 | Offset | Tamanho | Campo | Descrição |
 |---|---|---|---|
-| 0 | 16 | `model` | ASCII preenchido com zeros, ex. `"LUM1"` |
+| 0 | 16 | `model` | ASCII preenchido com zeros, ex. `"DriverPoE"` |
 | 16 | 4 | `epoch` | época atual |
 | 20 | 16 | `fw_version` | ASCII preenchido com zeros (`esp_app_get_description()->version`) |
 | 36 | 4 | `ip` | IPv4 atual, 4 bytes crus |
@@ -525,20 +575,54 @@ unidades respondem ao mesmo broadcast).
 | 0 | 4 | `uptime_s` |
 | 4 | 1 | `reset_reason` (`esp_reset_reason_t`) |
 | 5 | 1 | `poe_ready` (0/1) |
-| 6 | 1 | `poe_source` (`poe_source_t`: 0=none, 1=type1, 2=type2, 3=aux) |
+| 6 | 1 | `poe_source` (`tps2378_source_t`: 0=none, 1=type1, 2=type2, 3=aux) |
 | 7 | 1 | `driver_on` (0/1) |
 | 8 | 1 | `dim` (0-100) |
 | 9 | 4 | `vbus_mv` |
 | 13 | 4 | `led_voltage_mv` (bits de um `int32_t`) |
 | 17 | 4 | `eth_ip` |
 
-**`IDENTIFY_RESP` / `REBOOT_RESP` / `FACTORY_RESET_RESP` / `ROTATE_KEY_RESP` / `ROTATE_CONFIRM_RESP` / `CLAIM_RESP` / `ERR_RESP` (1 byte)**
+**`ON` (payload de 4 bytes, pedido)**
 
-Um único byte de status (`admin_status_t` em `components/poe_luminaire/admin_protocol.h`):
-`0` = OK, `1` = argumento inválido, `2` = não pronto (ex. `IDENTIFY`
-recusado porque PoE/AUX/VBUS não está confirmado — mesma regra que
-`ON`/`DIM` já seguem), `3` = não provisionado, `4` = nenhuma rotação de
-chave pendente, `5` = erro interno.
+| Offset | Tamanho | Campo |
+|---|---|---|
+| 0 | 4 | `ramp_ms` |
+
+Habilita o HV9910, subindo até o último brilho lembrado ao longo de
+`ramp_ms` milissegundos. Recusado com `ERR_NOT_READY` a menos que PoE ou
+AUX esteja confirmado (`tps2378_is_ready()`) — mesma regra de
+segurança de sempre.
+
+**`OFF` (payload de 4 bytes, pedido)**
+
+| Offset | Tamanho | Campo |
+|---|---|---|
+| 0 | 4 | `ramp_ms` |
+
+Desce o brilho até apagar ao longo de `ramp_ms` milissegundos, só então
+trava o `SHUTDOWN`. Sem gate de PoE/AUX — desligar é sempre permitido.
+
+**`DIM` (payload de 5 bytes, pedido)**
+
+| Offset | Tamanho | Campo |
+|---|---|---|
+| 0 | 1 | `percent` (0-100) |
+| 1 | 4 | `ramp_ms` |
+
+Faz a transição de brilho até `percent` ao longo de `ramp_ms`
+milissegundos. `percent=0` também desabilita o driver assim que a rampa
+termina (se estava ligado); `percent>0` também habilita o driver se
+estava desligado (mesmo gate de PoE/AUX do `ON` — mas, diferente do `ON`,
+o `DIM` nunca recusa: se o gate não deixar ligar agora, o brilho pedido
+fica gravado e é aplicado assim que a energia permitir).
+
+**`ON_RESP` / `OFF_RESP` / `DIM_RESP` / `IDENTIFY_RESP` / `REBOOT_RESP` / `FACTORY_RESET_RESP` / `ROTATE_KEY_RESP` / `ROTATE_CONFIRM_RESP` / `CLAIM_RESP` / `ERR_RESP` (1 byte)**
+
+Um único byte de status (`admin_status_t` em `components/admin_channel/admin_protocol.h`):
+`0` = OK, `1` = argumento inválido, `2` = não pronto (ex. `ON`/`IDENTIFY`
+recusados porque PoE/AUX/VBUS não está confirmado), `3` = não
+provisionado, `4` = nenhuma rotação de chave pendente, `5` = erro
+interno.
 
 **`ROTATE_KEY` (payload de 52 bytes, pedido)**
 
@@ -598,6 +682,14 @@ Cliente -> Dispositivo : STATUS (nonce=N1 não é exigido aqui, mas pode reenvia
 Dispositivo -> Cliente  : STATUS_RESP (uptime, motivo do reset, estado de PoE/driver)
 ```
 
+Ligando a 80% de brilho ao longo de 500ms (`ON`/`OFF`/`DIM` seguem o
+mesmo padrão — sem `CHALLENGE`/nonce, igual `STATUS`/`IDENTIFY`):
+
+```
+Cliente -> Dispositivo : DIM (autenticado com a chave ativa, payload=percent=80 || ramp_ms=500)
+Dispositivo -> Cliente  : DIM_RESP (status=OK)
+```
+
 ### Ferramenta de host
 
 Tudo num único arquivo autocontido, sem dependência entre módulos:
@@ -610,40 +702,61 @@ python lumtool.py
 ```
 
 ```
-=== LUM1 luminaire admin tool ===
+=== DriverPoE admin tool ===
 
-  1) Discover devices on the network
-  2) Provision a device (CLAIM, over the network)
-  3) Derive a key from MAC+epoch (recovery, no device needed)
-  4) Status
-  5) Identify (blink)
-  6) Reboot
-  7) Factory reset
-  8) Rotate admin key
-  0) Quit
+(no scan yet)
+  [S] Scan the network
+  [M] Enter a device IP manually
+  [K] Derive a key from MAC+epoch (recovery, no device needed)
+  [Q] Quit
 ```
 
-- **Discover devices** — varre a rede por broadcast, sem autenticação.
-- **Provision a device (CLAIM)** — o único caminho de provisionamento que
-  existe nesta ferramenta, inteiramente pela rede: descobre a unidade
-  escolhida, confirma que ainda não foi provisionada, deriva a chave real
-  de época 0, e manda um `CLAIM` sem autenticação nenhuma (ver
-  "Provisionar sem debugger" acima). A unidade grava a própria identidade
-  sozinha; a ferramenta acrescenta uma linha a um CSV de produção (serial,
-  MAC, modelo, época, versão do firmware, data/hora, operador — **nunca a
-  chave**). Não existe caminho de provisionamento por `esptool`/serial
-  nesta ferramenta — ela nunca toca a flash diretamente.
-- **Status/Identify/Reboot/Factory reset/Rotate admin key** — rodam um
-  `discover` primeiro e deixam escolher a unidade numa lista (ou digitar
-  o IP direto), sempre derivando a chave a partir do MAC+época que a
-  própria unidade acabou de reportar — nunca fica desatualizado depois de
-  um `rotate-key`. `Factory reset` exige digitar o serial exato pra
-  confirmar. `Rotate admin key` precisa do pacote `cryptography` (`pip
-  install cryptography`) para o envelope AES-256-GCM — a única
-  dependência fora da biblioteca padrão, e só usada ali, já que
-  reimplementar AES em Python puro não é algo pra fazer com
-  responsabilidade. `Provision a device` não precisa dela — `CLAIM` não
-  tem envelope nenhum, é payload em texto claro.
+O menu é sempre "primeiro escaneia, depois escolhe a unidade" (estilo
+`diskpart`): `[S]` varre a rede por broadcast (sem autenticação) e lista
+cada unidade encontrada, numerada, com serial/IP/época/firmware e se está
+provisionada; digitar o número entra no menu daquela unidade específica.
+`[M]` faz o mesmo pra uma unidade que não respondeu ao broadcast (outra
+sub-rede, por exemplo), a partir de um IP digitado direto. `[K]` deriva
+uma chave a partir de MAC+época sem precisar de nenhuma unidade
+respondendo (recuperação).
+
+Uma unidade ainda não provisionada só mostra `Provision (CLAIM)`. Uma já
+provisionada mostra os comandos agrupados em submenus:
+
+```
+=== DriverPoE-A4CF12B93D08  ip=192.168.1.50 ===
+  Status: provisioned
+  1) Info & control  (status / identify / on / off / dim)
+  2) Administration  (reboot / factory reset / rotate key)
+  0) Back to device list
+```
+
+- **Provision (CLAIM)** — o único caminho de provisionamento que existe
+  nesta ferramenta, inteiramente pela rede: confirma que a unidade ainda
+  não foi provisionada, deriva a chave real de época 0, e manda um
+  `CLAIM` sem autenticação nenhuma (ver "Provisionar sem debugger"
+  acima). A unidade grava a própria identidade sozinha; a ferramenta
+  acrescenta uma linha a um CSV de produção (serial, MAC, modelo, época,
+  versão do firmware, data/hora, operador — **nunca a chave**). Não
+  existe caminho de provisionamento por `esptool`/serial nesta
+  ferramenta — ela nunca toca a flash diretamente.
+- **Info & control → On/Off/Dim** — controlam o driver de LED pela rede
+  (o único caminho que existe agora — não há mais servidor TCP separado).
+  Pedem a rampa em milissegundos (Enter usa o padrão da placa,
+  `DEFAULT_RAMP_MS` no próprio `lumtool.py`, que precisa ficar igual a
+  `HV9910_DEFAULT_RAMP_MS` em `poe_luminaire_main.h`); `Dim` pede também o
+  brilho alvo (0-100).
+- **Info & control → Status/Identify** e **Administration →
+  Reboot/Factory reset/Rotate admin key** — sempre derivam a chave a
+  partir do MAC+época que a própria unidade acabou de reportar no scan —
+  nunca fica desatualizado depois de um `rotate-key`. `Factory reset`
+  exige digitar o serial exato pra confirmar. `Rotate admin key` precisa
+  do pacote `cryptography` (`pip install cryptography`) para o envelope
+  AES-256-GCM — a única dependência fora da biblioteca padrão, e só
+  usada ali, já que reimplementar AES em Python puro não é algo pra
+  fazer com responsabilidade. `Provision`/`On`/`Off`/`Dim` não precisam
+  dela — nenhum dos três tem envelope cifrado, só HMAC (ou, no caso do
+  `CLAIM`, nem isso).
 
 **Segredo mestre**: por padrão lido de `tools/secret.txt` (gitignored,
 nunca commitado). As opções que o usam (*Provision a device*, *Derive a
@@ -660,29 +773,61 @@ como `-m unittest` importa o arquivo pelo nome do módulo (`lumtool`, não
 `__main__`), o menu interativo nunca dispara nesse caminho, e vice-versa
 (`python lumtool.py` nunca roda os testes).
 
+## Strapping pins e o conector extra
+
+Quatro sinais desta placa caem em pinos de strapping do ESP32 clássico —
+que não têm estado elétrico garantido no instante do reset (antes de
+qualquer firmware rodar), porque quem os define hoje é só um resistor de
+LED, um pull-up habilitado tarde demais pelo firmware, ou o que o PHY
+Ethernet estiver fazendo no próprio power-up dele. Um quinto (o clock RMII
+externo) é strap também, mas por uma limitação de silício não dá pra
+apontar pra outro pino sem inverter quem gera esse clock. Ver a análise
+completa de cada um (o que o strap decide, e como o sinal específico desta
+placa interfere) no histórico do projeto — aqui vai só o plano de troca.
+
+Esta placa tem um conector extra, ainda sem função, com seis pinos livres
+de qualquer strap e qualquer restrição de fabricação de módulo:
+`PIN_EXTRA1`..`PIN_EXTRA6` em
+[main/poe_luminaire_main.h](main/poe_luminaire_main.h) (GPIO36, GPIO39,
+GPIO13, GPIO4, GPIO16, GPIO17). Plano de troca pra próxima revisão de PCB:
+
+| Sinal atual | Pino atual | Vira | Pino novo | Observação |
+|---|---|---|---|---|
+| `PIN_LED_BLUE` | GPIO12 (MTDI — strap de **tensão do flash**) | `PIN_EXTRA3` | GPIO13 | O mais urgente de tirar: hoje o resistor do LED azul, sozinho, provavelmente já força `VDD_SDIO=1.8V` num flash de 3.3V. |
+| `PIN_POE_T2P` | GPIO2 (strap **crítico** de boot mode) | `PIN_EXTRA2` | GPIO39 | Pino de entrada apenas — T2P nunca precisa ser saída. **Exige pull-up externo** (GPIO39 não tem pull interno), que essa placa não tem hoje mesmo no pino atual. |
+| `PIN_POE_CDB` | GPIO15 (MTDO — strap secundário + JTAG) | `PIN_EXTRA1` | GPIO36 | Mesma lógica do T2P: entrada só, **exige pull-up externo**. |
+| `PIN_ETH_PHY_RESET` | GPIO5 (strap secundário) | `PIN_EXTRA4` | GPIO4 | Sem função especial nenhuma — troca direta, sem pré-requisito. |
+| `PIN_ETH_REF_CLK` | GPIO0 (strap **crítico** de boot mode) | *(condicional)* | GPIO16 (`PIN_EXTRA5`) | Só é possível **invertendo quem gera o clock**: trocar `EMAC_CLK_EXT_IN` por `EMAC_CLK_OUT` em `eth_init.c` (o ESP32 passa a gerar os 50MHz, não o IP101G). **Exige confirmar no datasheet do IP101G que ele aceita operar como clock slave** e popular/remover componentes no lado do PHY de acordo — não é só reroteamento. Se essa condição não se confirmar, GPIO0 fica onde está; `PIN_EXTRA6` (GPIO17) sobra livre como alternativa de saída de clock (`EMAC_CLK_OUT_180`) caso o layout físico favoreça essa trilha em vez da 16. |
+
+Depois da troca, `PIN_LED_RED` (GPIO14, JTAG MTMS mas não é strap) é o
+único sinal que ainda compartilha função com o JTAG — aceitável, já que
+não decide nada no boot.
+
 ## Configuração e build
 
 Toda a configuração da aplicação vive em
-[components/poe_luminaire/poe_luminaire.h](components/poe_luminaire/poe_luminaire.h) (pinos, porta TCP, polaridades do
-HV9910, endereço do PHY, razão do divisor de tensão) — não há nada pra
-ajustar em `idf.py menuconfig`. As entradas em
+[main/poe_luminaire_main.h](main/poe_luminaire_main.h) (pinos, porta UDP do
+canal de administração, polaridades do HV9910, endereço do PHY, razão do
+divisor de tensão) — não há nada pra ajustar em `idf.py menuconfig`. As
+entradas em
 [sdkconfig.defaults](sdkconfig.defaults) são chaves do próprio ESP-IDF:
 elas habilitam a compilação do driver EMAC interno, reduzem a
 verbosidade padrão do log do console, e declaram o tamanho real da
 flash/tabela de partições (`CONFIG_ETH_ENABLED`,
 `CONFIG_ETH_USE_ESP32_EMAC`, `CONFIG_LOG_DEFAULT_LEVEL_WARN`,
 `CONFIG_LOG_MAXIMUM_LEVEL_INFO`, `CONFIG_BOOTLOADER_LOG_LEVEL_WARN`,
-`CONFIG_ESPTOOLPY_FLASHSIZE_4MB`, `CONFIG_PARTITION_TABLE_CUSTOM`) — não
-são parâmetros de hardware do projeto.
+`CONFIG_ESPTOOLPY_FLASHSIZE_4MB`, `CONFIG_PARTITION_TABLE_CUSTOM`,
+`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`) — não são parâmetros de hardware
+do projeto.
 
 ### Tamanho de flash / tabela de partições
 
 Esta placa tem um chip de flash de 4MB.
 [partitions.csv](partitions.csv), na raiz do projeto, declara uma tabela
-de partições dimensionada pra isso (mesmo layout de `nvs`/`phy_init` da
-tabela padrão de app único do ESP-IDF, só com uma partição `factory`
-maior, mais a partição `idnvs` de identidade — sem partições OTA, este é
-um firmware de imagem única).
+de partições dimensionada pra isso: `nvs`/`phy_init` nos mesmos offsets
+da tabela padrão do ESP-IDF, `otadata` + duas partições de app (`ota_0`/
+`ota_1`, 1MB cada — ver "Atualização OTA" abaixo) em vez de uma única
+`factory`, mais a partição `idnvs` de identidade.
 
 ```
 idf.py set-target esp32
@@ -691,20 +836,87 @@ idf.py -p PORTA flash monitor
 
 Na primeira vez, o gerenciador de componentes do IDF vai baixar o driver
 do PHY IP101G (`espressif/ip101`, veja
-[components/poe_luminaire/idf_component.yml](components/poe_luminaire/idf_component.yml)) — é necessário acesso à
+[components/eth_init/idf_component.yml](components/eth_init/idf_component.yml)) — é necessário acesso à
 internet nesse primeiro build.
+
+## Atualização OTA
+
+A tabela de partições já está pronta pra OTA segura — `otadata` + duas
+partições de aplicação (`ota_0`/`ota_1`, 1MB cada) em vez de uma única
+`factory` — mas **nenhuma lógica de atualização (a metade que grava uma
+imagem nova) existe ainda**: não há chamada a `esp_https_ota`/
+`esp_ota_begin`+`write`+`end` em lugar nenhum deste firmware. Isso é
+deliberado — o objetivo aqui foi só deixar a estrutura pronta, não
+inventar uma API de atualização improvisada. A outra metade do contrato
+de rollback — confirmar a imagem que já está rodando — está implementada,
+ver abaixo.
+
+- **Por que dois slots de 1MB**: o binário atual (`driverpoe.bin`)
+  tem hoje ~450KB — cada slot de 1MB sobra mais de 2x de margem (`idf.py
+  build` imprime a % livre de cada partição de app a cada build). Isso
+  cabe com folga nos 4MB desta placa junto com `nvs`/`phy_init`/`otadata`/
+  `idnvs`, ainda sobrando ~1.9MB de flash sem uso. Se o firmware algum dia
+  crescer a ponto de dois slots de 1MB não caberem mais com margem
+  adequada nos 4MB, a resposta correta é reavaliar o orçamento de flash
+  (reduzir alguma dependência, ou considerar um chip maior) — nunca
+  encolher os slots a ponto de perder a margem de segurança de uma
+  atualização, e nunca voltar a uma partição `factory` única só pra
+  "resolver" o aperto.
+- **Por que `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` já está ligado**
+  (`sdkconfig.defaults`): com dois slots de OTA, é o bootloader que
+  protege contra um update ruim — depois que um mecanismo de atualização
+  (ainda não implementado) trocar o slot de boot pra uma imagem nova, o
+  bootloader marca essa imagem como "pendente de confirmação" e, se ela
+  nunca se confirmar (trava, watchdog, falta de energia logo no primeiro
+  boot), volta sozinho pro slot anterior no próximo boot — sem precisar
+  de nenhuma lógica extra aqui. A contrapartida — confirmar a imagem que
+  conseguiu rodar, cancelando o rollback — **já está implementada**:
+  `confirm_app_if_pending_verify()` em `main/poe_luminaire_main.c`, chamada
+  logo no início do `app_main()` (depois do `status_leds_init()`, antes de
+  qualquer outro módulo), chama `esp_ota_mark_app_valid_cancel_rollback()`
+  sempre que a partição rodando ainda está `ESP_OTA_IMG_PENDING_VERIFY`.
+  Sem essa chamada, todo boot de uma imagem gerenciada por OTA ficaria
+  "pendente" pra sempre e reverteria sozinho a cada reset não confirmado —
+  não só no primeiro boot depois de um update real. Não existe nenhuma
+  lógica de auto-teste por trás disso ainda (confirma incondicionalmente,
+  só por ter chegado até `app_main()`); se um mecanismo de atualização
+  real for implementado, vale considerar gating essa confirmação em algum
+  critério mais forte (ex.: Ethernet up, PoE negociado) antes de cancelar
+  o rollback.
+- **O que falta pra OTA funcionar de verdade** (fora do escopo deste
+  documento, só pra deixar claro o que "pronto" significa aqui): um
+  cliente que baixe a imagem nova (`esp_https_ota` é o caminho padrão do
+  ESP-IDF), grave no slot inativo, valide, e só então chame
+  `esp_ota_set_boot_partition()` — nada disso existe neste firmware hoje.
 
 ### Estrutura de componentes
 
-`main/` contém só `poe_luminaire_main.c` (o `app_main()`) — tudo o resto
-(driver do HV9910, negociação PoE, sensor de tensão, Ethernet, servidor
-de comandos, identidade do dispositivo, canal de administração, e
-`poe_luminaire.h` com toda a configuração da placa) mora em
-`components/poe_luminaire/`, como um componente ESP-IDF próprio,
-requerido por `main/CMakeLists.txt`. O ESP-IDF descobre a pasta
-`components/` na raiz do projeto automaticamente — não precisa de
-nenhuma configuração extra (`EXTRA_COMPONENT_DIRS` etc.) pra isso
-funcionar.
+`main/` contém só dois arquivos: `poe_luminaire_main.c` (o `app_main()`) e
+`poe_luminaire_main.h` (todo o mapa de pinos/config da placa). Cada
+módulo de hardware é seu **próprio componente ESP-IDF independente**,
+direto em `components/` — `hv9910/`, `tps2378/`, `voltage_sense/`,
+`eth_init/`, `devid/`, `admin_channel/`, `status_leds/` — cada um com seu
+próprio `CMakeLists.txt` e sem nenhum conhecimento em tempo de compilação
+de qual placa está rodando: cada `_init()`/`_start()` recebe uma struct
+de config (`hv9910_config_t`, `tps2378_config_t`, ...) montada pelo
+`app_main()` a partir de `poe_luminaire_main.h` — o mesmo padrão que os
+próprios drivers do ESP-IDF usam (`i2c_config_t`, `spi_bus_config_t`,
+...). `main/CMakeLists.txt` é o único lugar que declara depender de todos
+os sete.
+
+Essa divisão existe pra resolver um problema concreto: um header de
+config compartilhado (`poe_luminaire_main.h`) só pode morar em UM lugar,
+e `main/` já depende de todo componente pra funcionar — se os
+componentes também dependessem de `main/` só pra pegar esse header, o
+ESP-IDF rejeitaria o ciclo de dependência no build. Com cada componente
+recebendo sua config via struct explícita em vez de incluir o header
+compartilhado diretamente, só `main/` conhece `poe_luminaire_main.h`, e a
+dependência flui numa única direção (`main` → cada componente).
+
+O ESP-IDF descobre a pasta `components/` na raiz do projeto
+automaticamente — não precisa de nenhuma configuração extra
+(`EXTRA_COMPONENT_DIRS` etc.) pra isso funcionar, mesmo com vários
+componentes lado a lado.
 
 ## Verbosidade do log no console
 
@@ -714,7 +926,7 @@ imagem, sondagem de heap/flash, etc) antes mesmo do `app_main()` rodar.
 Este projeto silencia tudo isso via `sdkconfig.defaults` (nível de log
 padrão da aplicação elevado pra `WARN`, nível de log do bootloader
 elevado pra `WARN`) e depois reabilita explicitamente o log `INFO` pras
-suas próprias oito tags de módulo bem no início do `app_main()` — veja
+suas próprias sete tags de módulo bem no início do `app_main()` — veja
 `quiet_boot_noise()` em
 [main/poe_luminaire_main.c](main/poe_luminaire_main.c). Avisos/erros
 internos do IDF ainda são impressos; só a conversa rotineira de nível
@@ -723,14 +935,14 @@ INFO é suprimida.
 ## Log de eventos de PoE/AUX/VBUS
 
 Toda vez que o sinal (com debounce) de CDB, T2P, ou "VBUS acima do
-limiar" muda de estado, `poe_negotiator` registra isso imediatamente e de
+limiar" muda de estado, `tps2378` registra isso imediatamente e de
 forma independente, não importa se isso vira ou não o veredito geral de
 pronto/não-pronto:
 
 ```
-I (...) POE_NEG: EVENT: CDB asserted — real PoE negotiated (inrush done)
-W (...) POE_NEG: EVENT: T2P dropped — no AUX/Type-2 confirmation anymore
-W (...) POE_NEG: EVENT: VBUS too low — 18300mV < 40000mV threshold
+I (...) TPS2378: EVENT: CDB asserted — real PoE negotiated (inrush done)
+W (...) TPS2378: EVENT: T2P dropped — no AUX/Type-2 confirmation anymore
+W (...) TPS2378: EVENT: VBUS too low — 18300mV < 40000mV threshold
 ```
 
 Isso importa porque as três condições são independentes
@@ -747,20 +959,21 @@ quieto por muito tempo durante o bring-up.
 
 ## Estrutura do código
 
-`main/` tem só o entry point; todo o resto do firmware é o componente
-`components/poe_luminaire/` (veja "Estrutura de componentes" acima):
+`main/` tem só o entry point + a config da placa; todo o resto do
+firmware é um componente independente em `components/` (veja "Estrutura
+de componentes" acima):
 
 | Arquivo                                             | Responsabilidade                                                  |
 | ---------------------------------------------------- | ---------------------------------------------------------------|
-| `main/poe_luminaire_main.c`                          | `app_main()`: orquestra a sequência de boot — tag de log `MAIN` |
-| `components/poe_luminaire/poe_luminaire.h`      | Mapa de pinos, suposições de hardware, e todos os valores de configuração da aplicação |
-| `components/poe_luminaire/hv9910.[ch]`               | Controle do driver de LED (SHUTDOWN + PWM de dimerização), persistência de brilho/estado em NVS — tag de log `HV9910` |
-| `components/poe_luminaire/poe_negotiator.[ch]`       | Monitoramento de CDB/T2P (PoE/AUX) e VBUS do TPS2378, watchdog de segurança — tag de log `POE_NEG` |
-| `components/poe_luminaire/voltage_sense.[ch]`        | Leitura de tensão VBUS/VLED (ADC_VLED_P/ADC_VLED_N) — tag de log `VOLT_SENSE` |
-| `components/poe_luminaire/eth_init.[ch]`             | Bring-up do PHY IP101G / Ethernet / DHCP — tag de log `ETH_INIT` |
-| `components/poe_luminaire/cmd_server.[ch]`           | Servidor de comandos TCP em texto — tag de log `CMD_SRV` |
-| `components/poe_luminaire/devid.[ch]`                | Identidade do dispositivo: serial, chave/época, claim remoto, staging de rotação de chave — tag de log `DEVID` |
-| `components/poe_luminaire/admin_protocol.h`          | Formato de pacote do canal de admin (struct, enums de tipo/status) — sem lógica |
-| `components/poe_luminaire/admin_channel.[ch]`        | Canal UDP de administração autenticado (task própria) — tag de log `ADMIN_CH` |
-| `components/poe_luminaire/idf_component.yml`         | Dependência gerenciada do driver de PHY IP101G |
+| `main/poe_luminaire_main.c`                          | `app_main()`: monta a config de cada componente e orquestra a sequência de boot — tag de log `MAIN` |
+| `main/poe_luminaire_main.h`                          | Mapa de pinos, suposições de hardware, e todos os valores de configuração da aplicação — só incluído por `main/poe_luminaire_main.c` |
+| `components/hv9910/hv9910.[ch]`                      | Controle do driver de LED (SHUTDOWN + PWM de dimerização) numa única task/fila de comandos, persistência de brilho/estado em NVS — tag de log `HV9910` |
+| `components/tps2378/tps2378.[ch]`                    | Monitoramento de CDB/T2P (PoE/AUX) e VBUS (mediana de 3 amostras + histerese) do TPS2378, watchdog de segurança — tag de log `TPS2378` |
+| `components/voltage_sense/voltage_sense.[ch]`        | Leitura de tensão VBUS/VLED (ADC_CH_VLED_P/ADC_CH_VLED_N) — tag de log `VOLT_SENSE` |
+| `components/status_leds/status_leds.[ch]`            | Único lugar que controla os LEDs indicadores (azul: energia/tensão, vermelho: estado do driver) — sem dependência de outros componentes, recebe `power_ok_fn`/`driver_on_fn` do `main` por ponteiro de função, task própria |
+| `components/eth_init/eth_init.[ch]`                  | Bring-up do PHY IP101G / Ethernet / DHCP, com retry+backoff e sem reinicializações em loop — tag de log `ETH_INIT` |
+| `components/eth_init/idf_component.yml`              | Dependência gerenciada do driver de PHY IP101G |
+| `components/devid/devid.[ch]`                        | Identidade do dispositivo: serial, chave/época, claim remoto, staging de rotação de chave — tag de log `DEVID` |
+| `components/admin_channel/admin_protocol.h`          | Formato de pacote do canal de admin (struct, enums de tipo/status) — sem lógica |
+| `components/admin_channel/admin_channel.[ch]`        | Canal UDP de administração autenticado (task própria) — único ponto de controle pela rede (discover, status, on/off/dim, identify, reboot, factory reset, rotação de chave) — tag de log `ADMIN_CH` |
 | `tools/lumtool.py`                                   | Ferramenta de host única e autocontida: menu interativo com provisionamento e administração remota |
