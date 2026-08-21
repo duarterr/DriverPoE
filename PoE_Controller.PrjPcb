@@ -31,7 +31,7 @@ DItemRevisionGUID=
 ReportSuppressedErrorsInMessages=0
 FSMCodingStyle=eFMSDropDownList_OneProcess
 FSMEncodingStyle=eFMSDropDownList_OneHot
-IsProjectConflictPreventionWarningsEnabled=0
+IsProjectConflictPreventionWarningsEnabled=1
 ConstraintManagerFlow=0
 IsVirtualBomDocumentRemoved=0
 OutputPath=
@@ -241,32 +241,32 @@ DocumentPath=Project Outputs for PoE_Controller\NC Drill\PCB_Controller.TXT
 DItemRevisionGUID=
 
 [Parameter1]
-Name=documentnumber
-Value=1
+Name=title
+Value=ESP32 PoE Controller
 
 [Parameter2]
-Name=Engineer1
-Value=Renan Duarte
+Name=revision
+Value=1
 
 [Parameter3]
-Name=Engineer2
-Value=André P.
+Name=Engineer4
+Value=Rafael B.
 
 [Parameter4]
 Name=Engineer3
 Value=Guilherme B.
 
 [Parameter5]
-Name=Engineer4
-Value=Rafael B.
+Name=Engineer2
+Value=André P.
 
 [Parameter6]
-Name=revision
-Value=0
+Name=Engineer1
+Value=Renan Duarte
 
 [Parameter7]
-Name=title
-Value=ESP32 PoE Controller
+Name=documentnumber
+Value=1
 
 [Configuration1]
 Name=Sources
