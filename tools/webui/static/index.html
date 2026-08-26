@@ -22,7 +22,7 @@
   header button:disabled { opacity: .5; cursor: default; }
   main { padding: 16px 20px; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
   .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
-  .card h2 { font-size: 15px; margin: 0 0 4px; }
+  .card h2 { font-size: 15px; margin: 0 0 4px; padding-right: 28px; }
   .card .sub { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; font-size: 13px; }
   .row .label { color: var(--muted); }
@@ -83,6 +83,18 @@
   .ota-progress { display: none; margin-top: 6px; height: 16px; border-radius: 4px; background: var(--bg); border: 1px solid var(--border); overflow: hidden; }
   .ota-progress.show { display: block; }
   .ota-bar { height: 100%; width: 0%; background: var(--accent); color: #fff; font-size: 10px; line-height: 16px; text-align: center; white-space: nowrap; transition: width .2s; }
+
+  .select-check { position: absolute; top: 12px; right: 12px; width: 18px; height: 18px; cursor: pointer; }
+  .card { position: relative; }
+
+  .bulk-bar { display: none; background: var(--card); border-bottom: 1px solid var(--border); padding: 10px 20px; }
+  .bulk-bar.show { display: block; }
+  .bulk-bar .bulk-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .bulk-bar .bulk-row:first-child { margin-top: 0; }
+  .bulk-count { font-size: 13px; font-weight: 600; margin-right: 4px; }
+  .bulk-bar .btn { min-width: 0; padding: 6px 12px; }
+  .bulk-dim-wrap { position: relative; flex: 1; min-width: 140px; max-width: 260px; display: flex; align-items: center; }
+  .bulk-dim-wrap input[type=range] { width: 100%; }
 </style>
 </head>
 <body>
@@ -94,6 +106,27 @@
   <input id="bcast" type="text" placeholder="broadcast (auto)" size="16">
   <button id="scanBtn" onclick="scanDevices()">Scan network</button>
 </header>
+
+<div class="bulk-bar" id="bulkBar">
+  <div class="bulk-row">
+    <span class="bulk-count" id="bulkCount">0 selected</span>
+    <button class="btn" onclick="bulkOn()">On</button>
+    <button class="btn" onclick="bulkOff()">Off</button>
+    <button class="btn" onclick="bulkIdentify()">Identify</button>
+    <div class="bulk-dim-wrap">
+      <span class="dim-tip" id="bulk-dim-tip">50%</span>
+      <input type="range" id="bulkDimSlider" min="0" max="100" step="1" value="50"
+             oninput="bulkDimInput(this)" onchange="bulkDimCommit(this)">
+    </div>
+    <button class="btn" onclick="clearSelection()">Clear selection</button>
+  </div>
+  <div class="bulk-row">
+    <button class="btn btn-danger" onclick="bulkReboot()">Reboot</button>
+    <button class="btn btn-danger" onclick="bulkFactoryReset()">Factory reset</button>
+    <button class="btn btn-danger" onclick="bulkChangeSecret()">Change secret</button>
+  </div>
+</div>
+
 <main id="devices"><div class="empty">Click "Scan network" to discover luminaires on this LAN.</div></main>
 
 <dialog id="secretDialog">
@@ -116,6 +149,7 @@
 // back after "Change admin secret") -- never anything read off the wire.
 // ----------------------------------------------------------------------
 let devices = [];
+let selectedIndices = new Set(); // survives renderDevices() rebuilds -- selection state lives here, not in the DOM
 
 // Broadcast-address dropdown -- lists each local network interface's own
 // broadcast address (computed server-side from IP+netmask, see app.py's
@@ -150,6 +184,7 @@ function renderDevices() {
   const el = document.getElementById('devices');
   if (!devices.length) {
     el.innerHTML = '<div class="empty">No unit responded. Try Scan again, or check the broadcast address.</div>';
+    updateBulkBar();
     return;
   }
   el.innerHTML = devices.map((d, i) => {
@@ -159,6 +194,9 @@ function renderDevices() {
     const gate = (name, ok) => pill(name, ok ? 'on' : 'err');
     return `
     <div class="card" id="card-${i}">
+      <input type="checkbox" class="select-check" id="select-${i}"
+             ${selectedIndices.has(i) ? 'checked' : ''} onchange="toggleSelect(${i}, this.checked)"
+             title="Select for bulk actions">
       <h2>${d.serial}</h2>
 
       <div class="section-label">Device info</div>
@@ -224,6 +262,7 @@ function renderDevices() {
       <div class="msg" id="msg-${i}"></div>
     </div>`;
   }).join('');
+  updateBulkBar();
 }
 
 const MSG_DISPLAY_MS = 2000; // how long a card's status message stays visible before auto-hiding
@@ -242,6 +281,87 @@ function showMsg(i, text, ok) {
   }, MSG_DISPLAY_MS);
 }
 
+// Bulk actions -- a selection (checkbox per card, state kept in
+// selectedIndices, not the DOM) plus a toolbar that runs the same
+// per-device functions already defined below (cmd(), factoryReset(),
+// changeSecret()) sequentially over every selected unit. Sequential, not
+// parallel: several of those functions can open the shared #secretDialog
+// to ask the operator for a secret, and that dialog only supports one
+// concurrent use.
+function toggleSelect(i, checked) {
+  if (checked) selectedIndices.add(i); else selectedIndices.delete(i);
+  updateBulkBar();
+}
+
+function clearSelection() {
+  selectedIndices.clear();
+  renderDevices();
+}
+
+function updateBulkBar() {
+  const bar = document.getElementById('bulkBar');
+  const n = selectedIndices.size;
+  document.getElementById('bulkCount').textContent = `${n} selected`;
+  bar.classList.toggle('show', n > 0);
+}
+
+function selectedSerials() {
+  return [...selectedIndices].map((i) => devices[i]?.serial).filter(Boolean);
+}
+
+async function runBulk(fn) {
+  for (const i of [...selectedIndices]) {
+    if (devices[i]) await fn(i);
+  }
+}
+
+async function bulkOn() { await runBulk((i) => cmd(i, 'on')); }
+async function bulkOff() { await runBulk((i) => cmd(i, 'off')); }
+async function bulkIdentify() { await runBulk((i) => cmd(i, 'identify')); }
+
+function bulkDimInput(el) {
+  const tip = document.getElementById('bulk-dim-tip');
+  tip.textContent = `${el.value}%`;
+  tip.classList.add('show');
+  const pct = (el.value - el.min) / (el.max - el.min);
+  const thumbWidth = 16;
+  tip.style.left = `${thumbWidth / 2 + pct * (el.offsetWidth - thumbWidth)}px`;
+}
+
+async function bulkDimCommit(el) {
+  document.getElementById('bulk-dim-tip').classList.remove('show');
+  await runBulk((i) => cmd(i, 'dim', { percent: +el.value }));
+}
+
+async function bulkReboot() {
+  const serials = selectedSerials();
+  if (!serials.length) return;
+  if (!confirm(`Reboot ${serials.length} unit(s)?\n\n${serials.join('\n')}`)) return;
+  await runBulk((i) => cmd(i, 'reboot'));
+}
+
+async function bulkFactoryReset() {
+  const serials = selectedSerials();
+  if (!serials.length) return;
+  const typed = prompt(`Type RESET to confirm FACTORY_RESET on ${serials.length} unit(s):\n\n${serials.join('\n')}`);
+  if (typed !== 'RESET') return;
+  // Skips factoryReset(i)'s own per-unit "type the exact serial" prompt --
+  // the confirmation above already covers the whole selected set -- and
+  // calls the same underlying command directly instead.
+  await runBulk((i) => cmd(i, 'factory_reset', { confirm_serial: devices[i].serial }));
+}
+
+async function bulkChangeSecret() {
+  const serials = selectedSerials();
+  if (!serials.length) return;
+  const typed = prompt(`Type CONFIRM to generate and set a new random admin secret on ${serials.length} unit(s):\n\n${serials.join('\n')}`);
+  if (typed !== 'CONFIRM') return;
+  // Always a fresh random secret per unit -- reusing one secret across
+  // multiple physical units would be a worse security practice, so bulk
+  // change-secret never offers changeSecret(i)'s "type one in" choice.
+  await runBulk((i) => doChangeSecret(i, null));
+}
+
 async function scanDevices() {
   const btn = document.getElementById('scanBtn');
   btn.disabled = true;
@@ -252,6 +372,7 @@ async function scanDevices() {
     const resp = await fetch(url);
     const data = await resp.json();
     devices = data.devices || [];
+    selectedIndices.clear(); // indices are only meaningful within one scan's result set
     renderDevices();
   } catch (e) {
     document.getElementById('devices').innerHTML = `<div class="empty">Scan failed: ${e}</div>`;
@@ -351,7 +472,6 @@ async function factoryReset(i) {
 }
 
 async function changeSecret(i) {
-  const d = devices[i];
   const choice = confirm('OK = generate a random secret.\nCancel = type one in.');
   let newSecretHex = null;
   if (!choice) {
@@ -359,6 +479,13 @@ async function changeSecret(i) {
     if (!typed) return;
     newSecretHex = typed.trim();
   }
+  await doChangeSecret(i, newSecretHex);
+}
+
+// Shared by changeSecret(i) (single unit, operator picks random-or-typed)
+// and bulkChangeSecret() (always random, one call per selected unit).
+async function doChangeSecret(i, newSecretHex) {
+  const d = devices[i];
   let secretHex = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     const body = Object.assign({}, newSecretHex ? { new_secret_hex: newSecretHex } : {}, secretHex ? { secret_hex: secretHex } : {});
