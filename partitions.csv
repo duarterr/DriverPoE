@@ -15,31 +15,35 @@
 # it as "pending verify" -- IS implemented: see
 # confirm_app_if_pending_verify() in main/poe_luminaire_main.c.
 #
-# (2026-08-20: briefly reverted to a single-"factory" layout to A/B-test
-# whether the OTA partition table was behind a slow/flaky boot -- it
-# wasn't, the same behavior persisted with the old layout too, so this is
-# back to the OTA-ready structure.)
+# "nvs" holds two product-owned NVS namespaces: hv9910's brightness/on-off
+# memory, and the admin channel's secret (namespace "devid", key "secret"
+# -- see components/devid/devid.c). Both are "factory-resettable" state on
+# purpose -- FACTORY_RESET (admin_channel.c) erases this whole partition,
+# which is why it also reverts the admin secret to the compiled-in factory
+# default (devid_init() rewrites it automatically on the next boot, the
+# same way it does on a truly first boot) as well as forgetting the
+# remembered brightness/on-off state -- see README.md "Identidade do
+# dispositivo". The serial is NOT stored here (or anywhere) -- it's
+# recomputed from the MAC at every boot, see devid.c. Sized at 0x14000
+# (kept from an earlier design that also budgeted room for a since-removed
+# Matter integration's fabric table here) -- comfortably larger than the
+# two namespaces above actually need; the extra headroom costs nothing
+# that wasn't already lost to alignment padding (app-type partitions must
+# start on a 64KB-aligned offset).
 #
-# Sizing: each app slot is 1MB. The actual firmware image is currently
-# ~450KB (run `idf.py build` and check the "app partition" free-space
-# line), so each 1MB slot has well over 2x headroom for growth -- 4MB
-# comfortably fits two full-size slots plus everything else below with
-# ~1.9MB left over unused. otadata sits between nvs and phy_init (not
-# after phy_init) specifically so phy_init's own end lands back on the
-# 0x10000 boundary ota_0 needs -- app-type partitions must start on a
-# 64KB-aligned offset; data-type ones (nvs/phy_init/otadata/idnvs) only
-# need 4KB alignment.
-nvs,      data, nvs,     0x9000,   0x6000,
-phy_init, data, phy,     0xf000,   0x1000,
-otadata,  data, ota,     0x10000,  0x2000,
-ota_0,    app,  ota_0,   0x20000,  0x100000,
-ota_1,    app,  ota_1,   0x120000, 0x100000,
-# Device identity (serial derivation input, admin key, key epoch) —
-# provisioned once at the production station (see tools/lumtool.py) and
-# read by components/devid/devid.c. Deliberately separate from the "nvs" partition
-# above: FACTORY_RESET (via the admin channel) erases only "nvs", never
-# this one, so serial/key/epoch always survive a factory reset -- and,
-# just as deliberately, separate from "otadata"/ota_0/ota_1 too: a future
-# OTA update swapping the running app image must never touch device
-# identity either.
-idnvs,    data, nvs,     0x220000, 0x4000,
+# Sizing: each app slot is ~1.88MB (0x1E0000) -- generous headroom left
+# over from when this product briefly carried a Matter/esp-matter
+# integration (removed; the actual firmware image is a few hundred KB).
+# No need to shrink these now -- unused app-partition space just sits
+# idle, and keeping the slots this size leaves plenty of room for this
+# firmware to grow before the partition table needs revisiting.
+nvs,      data, nvs,     0x9000,   0x14000,
+phy_init, data, phy,     0x1d000,  0x1000,
+otadata,  data, ota,     0x1e000,  0x2000,
+ota_0,    app,  ota_0,   0x20000,  0x1e0000,
+ota_1,    app,  ota_1,   0x200000, 0x1e0000,
+# 0x20000 (128KB) left unused at the end of the 4MB chip: the 0x1c000
+# (112KB) the original layout already left idle, plus the 0x4000 (16KB)
+# an old identity partition used to occupy before an even earlier
+# reformulation of this product's device-identity design. Not allocated --
+# nothing consumes it.

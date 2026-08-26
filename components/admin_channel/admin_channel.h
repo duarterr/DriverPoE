@@ -1,5 +1,5 @@
 /** @file admin_channel.h
- * @brief Canal UDP autenticado de administração.
+ * @brief Authenticated UDP admin channel.
  */
 #pragma once
 
@@ -9,14 +9,15 @@
 extern "C" {
 #endif
 
-/** @brief Configuração do servidor administrativo. */
+/** @brief Admin server configuration. */
 typedef struct {
-    uint16_t port; /**< Porta UDP local. */
+    uint16_t port; /**< Local UDP port. */
 } admin_channel_config_t;
 
-/** @brief Inicia a tarefa do canal administrativo.
- * @param config Configuração da porta UDP.
- * @return Nenhum.
+/**
+ * @brief Starts the admin channel task.
+ * @param config UDP port configuration.
+ * @return None.
  */
 void admin_channel_start(const admin_channel_config_t *config);
 

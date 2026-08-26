@@ -1,5 +1,5 @@
 /** @file tps2378.h
- * @brief Monitoramento de PoE/AUX e validação da tensão VBUS.
+ * @brief PoE/AUX power monitoring and VBUS validation.
  */
 #pragma once
 
@@ -11,80 +11,110 @@
 extern "C" {
 #endif
 
-/** @brief Fonte de alimentação detectada. */
+/** @brief Detected power source. */
 typedef enum {
-    TPS2378_SOURCE_NONE = 0, /**< Nenhuma fonte válida. */
+    TPS2378_SOURCE_NONE = 0, /**< No valid source. */
     TPS2378_SOURCE_TYPE1,    /**< PoE IEEE 802.3af. */
     TPS2378_SOURCE_TYPE2,    /**< PoE IEEE 802.3at. */
-    TPS2378_SOURCE_AUX,      /**< Alimentação auxiliar. */
+    TPS2378_SOURCE_AUX,      /**< Auxiliary power supply. */
 } tps2378_source_t;
 
-/** @brief Configuração do monitor TPS2378. */
+/** @brief TPS2378 monitor configuration. */
 typedef struct {
-    gpio_num_t cdb_pin;     /**< Entrada CDB. */
-    gpio_num_t t2p_pin;     /**< Entrada T2P. */
-    int vbus_min_mv;        /**< VBUS mínima válida. */
-    int vbus_hysteresis_mv; /**< Histerese de VBUS. */
-    void (*on_power_ready)(tps2378_source_t source, void *ctx); /**< Notificação de alimentação pronta. */
-    void (*on_power_lost)(void *ctx); /**< Notificação de perda de alimentação. */
-    void *callback_ctx; /**< Contexto das notificações. */
+    gpio_num_t cdb_pin;      /**< CDB input. */
+    gpio_num_t t2p_pin;      /**< T2P input. */
+    int vbus_min_mv;         /**< Minimum valid VBUS. */
+    int vbus_hysteresis_mv;  /**< VBUS hysteresis margin. */
+    void (*on_power_ready)(tps2378_source_t source, void *ctx); /**< Power-ready notification. */
+    void (*on_power_lost)(void *ctx);                            /**< Power-lost notification. */
+    void *callback_ctx;      /**< Context passed to both notifications. */
 } tps2378_config_t;
 
-/** @brief Inicializa o monitor de alimentação.
- * @param config GPIOs, limites e callbacks.
- * @return Nenhum.
+/**
+ * @brief Initializes the power monitor.
+ * @param config GPIOs, thresholds, and callbacks.
+ * @return None.
  */
 void tps2378_init(const tps2378_config_t *config);
 
-/** @brief Aguarda a alimentação ser confirmada.
- * @param timeout Tempo máximo em ticks, ou portMAX_DELAY.
- * @return true se a alimentação está pronta.
+/**
+ * @brief Blocks until power is confirmed.
+ * @param timeout Maximum ticks to wait, or portMAX_DELAY.
+ * @return true if power is ready.
  */
 bool tps2378_wait_ready(TickType_t timeout);
 
-/** @brief Consulta o estado de alimentação confirmado.
- * @return true se fonte e VBUS são válidas.
+/**
+ * @brief Queries the confirmed power state.
+ * @return true if source and VBUS are both valid.
  */
 bool tps2378_is_ready(void);
 
-/** @brief Obtém a fonte de alimentação detectada.
- * @return Fonte atual.
+/**
+ * @brief Gets the detected power source.
+ * @return Current source.
  */
 tps2378_source_t tps2378_get_source(void);
 
-/** @brief Consulta os sinais confirmados pelo debounce.
- * @return true quando o respectivo sinal está confirmado.
+/**
+ * @brief Queries the debounced CDB signal.
+ * @return true if CDB is confirmed.
  */
 bool tps2378_cdb_confirmed(void);
+
+/**
+ * @brief Queries the debounced T2P signal.
+ * @return true if T2P is confirmed.
+ */
 bool tps2378_t2p_confirmed(void);
+
+/**
+ * @brief Queries the debounced VBUS-ok signal.
+ * @return true if VBUS is confirmed.
+ */
 bool tps2378_vbus_confirmed(void);
 
-/** @brief Consulta os sinais instantâneos, sem debounce.
- * @return true quando o respectivo sinal está ativo.
+/**
+ * @brief Reads the instantaneous (non-debounced) CDB signal.
+ * @return true if CDB is currently active.
  */
 bool tps2378_cdb_raw(void);
+
+/**
+ * @brief Reads the instantaneous (non-debounced) T2P signal.
+ * @return true if T2P is currently active.
+ */
 bool tps2378_t2p_raw(void);
+
+/**
+ * @brief Reads the instantaneous (non-debounced) VBUS-ok signal.
+ * @return true if VBUS is currently above the minimum threshold.
+ */
 bool tps2378_vbus_raw(void);
 
-/** @brief Obtém a última VBUS medida.
- * @return Tensão em milivolts.
+/**
+ * @brief Gets the last measured VBUS.
+ * @return Voltage in millivolts.
  */
 int tps2378_get_vbus_mv(void);
 
-/** @brief Obtém o nome legível de uma fonte.
- * @param source Fonte a converter.
- * @return Nome da fonte.
+/**
+ * @brief Gets a human-readable name for a source.
+ * @param source Source to convert.
+ * @return Source name.
  */
 const char *tps2378_source_name(tps2378_source_t source);
 
-/** @brief Obtém o identificador curto de uma fonte.
- * @param source Fonte a converter.
- * @return Identificador sem espaços.
+/**
+ * @brief Gets a short identifier for a source.
+ * @param source Source to convert.
+ * @return Identifier with no spaces.
  */
 const char *tps2378_source_short_name(tps2378_source_t source);
 
-/** @brief Obtém a potência PoE nominal disponível.
- * @return Potência em watts, ou zero para AUX/nenhuma fonte.
+/**
+ * @brief Gets the nominal PoE power available for the current source.
+ * @return Power in watts, or zero for AUX/no source.
  */
 float tps2378_get_available_power_w(void);
 

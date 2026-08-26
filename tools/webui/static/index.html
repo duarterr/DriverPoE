@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DriverPoE</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f5f7; --fg: #1b1e22; --card: #ffffff; --border: #d9dce1;
+    --accent: #2563eb; --danger: #b3261e; --ok: #157a3d; --muted: #6b7280;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14161a; --fg: #e7e9ec; --card: #1d2025; --border: #33373e; --muted: #9aa1ab; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+  header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 18px; margin: 0; flex: 1; }
+  header input, header select { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--fg); font: inherit; font-size: 13px; }
+  header button { padding: 6px 14px; border: none; border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; }
+  header button:disabled { opacity: .5; cursor: default; }
+  main { padding: 16px 20px; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+  .card h2 { font-size: 15px; margin: 0 0 4px; }
+  .card .sub { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; font-size: 13px; }
+  .row .label { color: var(--muted); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .pill.on { background: #16a34a22; color: var(--ok); }
+  .pill.off { background: #6b728022; color: var(--muted); }
+  .pill.warn { background: #f59e0b22; color: #92600a; }
+  .pill.err { background: #ef444422; color: var(--danger); }
+  /* Shared style for every button inside a card -- On/Off/Identify, Get
+     status, Reboot/Factory reset/Change secret, Upload firmware all use
+     this SAME rule, so they're identical in size/font/style; .btn-danger
+     only overrides color, everything else (padding, border-radius, font,
+     min-width) stays shared. */
+  .btn { min-width: 92px; padding: 7px 12px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--fg); cursor: pointer; font: inherit; font-size: 12px; text-align: center; }
+  .btn:hover { border-color: var(--accent); }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .btn-danger { color: var(--danger); border-color: var(--danger); }
+  .btn-fill { flex: 1; min-width: 0; } /* the 6 On/Off/Identify + Reboot/Factory reset/Change secret buttons -- each fills 1/3 of its row instead of the shared min-width */
+  .controls { margin-top: 10px; }
+  .controls-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .controls-row:first-child { margin-top: 0; }
+  .dim-wrap { position: relative; flex: 1; min-width: 100px; display: flex; align-items: center; }
+  .dim-wrap input[type=range] { width: 100%; vertical-align: middle; }
+  .dim-tip { position: absolute; bottom: 100%; transform: translateX(-50%); margin-bottom: 4px; padding: 2px 6px; border-radius: 4px; background: var(--fg); color: var(--card); font-size: 11px; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity .1s; }
+  .dim-tip.show { opacity: 1; }
+  .msg { margin-top: 8px; font-size: 12px; padding: 6px 8px; border-radius: 6px; display: none; }
+  .msg.show { display: block; }
+  .msg.ok { background: #16a34a1a; color: var(--ok); }
+  .msg.err { background: #ef44441a; color: var(--danger); }
+  .empty { color: var(--muted); padding: 40px; text-align: center; grid-column: 1 / -1; }
+  dialog { border-radius: 10px; border: 1px solid var(--border); padding: 16px; background: var(--card); color: var(--fg); }
+  dialog input[type=text] { width: 100%; padding: 6px; margin: 6px 0 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
+  dialog .actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .card .info { margin: 8px 0 4px; }
+  .section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 6px; }
+  .section-label-sub { margin-top: 10px; } /* a sub-heading within the same divider-bounded section (e.g. "Admin controls" under "Controls") -- some breathing room from the group above, no full divider needed */
+  .card hr.divider { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+  .center-row { display: flex; justify-content: center; margin-top: 8px; }
+  .dim-row { align-items: center; }
+  .dim-label { font-size: 13px; color: var(--muted); min-width: 56px; }
+  .ota { margin-top: 6px; }
+  .ota-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .ota-row input[type=file] {
+    flex: 1; min-width: 120px; font: inherit; font-size: 12px; color: var(--fg);
+    padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg);
+  }
+  /* The browser's own "Choose file" sub-button, styled to match .btn --
+     ::file-selector-button is the standard pseudo-element (Chrome/Edge/
+     Firefox); ::-webkit-file-upload-button is Safari's older equivalent
+     of the same thing, kept alongside for it specifically. */
+  .ota-row input[type=file]::file-selector-button,
+  .ota-row input[type=file]::-webkit-file-upload-button {
+    margin-right: 8px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 5px;
+    background: transparent; color: var(--fg); font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .ota-row input[type=file]:hover::file-selector-button,
+  .ota-row input[type=file]:hover::-webkit-file-upload-button { border-color: var(--accent); }
+  .ota-progress { display: none; margin-top: 6px; height: 16px; border-radius: 4px; background: var(--bg); border: 1px solid var(--border); overflow: hidden; }
+  .ota-progress.show { display: block; }
+  .ota-bar { height: 100%; width: 0%; background: var(--accent); color: #fff; font-size: 10px; line-height: 16px; text-align: center; white-space: nowrap; transition: width .2s; }
+</style>
+</head>
+<body>
+<header>
+  <h1>DriverPoE</h1>
+  <select id="bcastSelect" onchange="applyBcastSelection(this)">
+    <option value="">Interface...</option>
+  </select>
+  <input id="bcast" type="text" placeholder="broadcast (auto)" size="16">
+  <button id="scanBtn" onclick="scanDevices()">Scan network</button>
+</header>
+<main id="devices"><div class="empty">Click "Scan network" to discover luminaires on this LAN.</div></main>
+
+<dialog id="secretDialog">
+  <form method="dialog" onsubmit="return false">
+    <div id="secretDialogMsg" style="margin-bottom:8px;color:var(--muted);font-size:13px;"></div>
+    <input id="secretDialogInput" type="text" placeholder="64 hex characters" maxlength="64">
+    <div class="actions">
+      <button type="button" onclick="document.getElementById('secretDialog').close()">Cancel</button>
+      <button type="button" id="secretDialogOk" style="background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;">Try</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+// ----------------------------------------------------------------------
+// No protocol/HMAC/secret logic here -- this page only ever calls the
+// FastAPI backend's JSON API (app.py), which does all of that via the
+// driverpoe package. The one secret this page ever handles is an admin
+// secret the OPERATOR chooses to type in (or a freshly changed one shown
+// back after "Change admin secret") -- never anything read off the wire.
+// ----------------------------------------------------------------------
+let devices = [];
+
+// Broadcast-address dropdown -- lists each local network interface's own
+// broadcast address (computed server-side from IP+netmask, see app.py's
+// /api/interfaces) so picking the right one on a multi-homed machine
+// (Wi-Fi to the luminaire's router + a wired connection to a different
+// one, a common case) doesn't require manually running ipconfig and
+// doing the subnet math by hand.
+async function loadInterfaces() {
+  const select = document.getElementById('bcastSelect');
+  try {
+    const resp = await fetch('/api/interfaces');
+    const data = await resp.json();
+    for (const iface of (data.interfaces || [])) {
+      const opt = document.createElement('option');
+      opt.value = iface.broadcast;
+      opt.textContent = `${iface.interface} (${iface.address}) -> ${iface.broadcast}`;
+      select.appendChild(opt);
+    }
+  } catch (e) { /* dropdown just stays at "Interface..." -- the manual text field still works */ }
+}
+
+function applyBcastSelection(select) {
+  if (select.value) document.getElementById('bcast').value = select.value;
+}
+
+window.addEventListener('DOMContentLoaded', loadInterfaces);
+
+function pill(text, cls) { return `<span class="pill ${cls}">${text}</span>`; }
+function row(label, value) { return `<div class="row"><span class="label">${label}</span> <span>${value}</span></div>`; }
+
+function renderDevices() {
+  const el = document.getElementById('devices');
+  if (!devices.length) {
+    el.innerHTML = '<div class="empty">No unit responded. Try Scan again, or check the broadcast address.</div>';
+    return;
+  }
+  el.innerHTML = devices.map((d, i) => {
+    const power = d.poe_ready ? pill('ready', 'on') : pill(d.power_blocking_reason || 'not ready', 'warn');
+    const driver = d.driver_on ? pill(`on ${d.dim_percent}%`, 'on') : pill('off', 'off');
+    const desired = d.desired_on ? pill('on', 'on') : pill('off', 'off');
+    const gate = (name, ok) => pill(name, ok ? 'on' : 'err');
+    return `
+    <div class="card" id="card-${i}">
+      <h2>${d.serial}</h2>
+
+      <div class="section-label">Device info</div>
+      <div class="sub">${d.source_ip} &middot; fw ${d.fw_version} &middot; ${d.mac}</div>
+
+      <hr class="divider">
+
+      <div class="section-label">Device status</div>
+      <div class="info">
+        ${row('Uptime', `${d.uptime_s}s`)}
+        ${row('Last reset reason', d.reset_reason)}
+        ${row('Power', `${power} &middot; source: ${d.poe_source}`)}
+        ${row('Power gates', `${gate('CDB', d.poe_cdb_confirmed)} ${gate('T2P', d.poe_t2p_confirmed)} ${gate('VBUS', d.poe_vbus_confirmed)}`)}
+        ${row('Driver (actual)', driver)}
+        ${row('Driver (desired)', `${desired}${(d.desired_on && !d.driver_on) ? '  (pending -- will apply once power is confirmed)' : ''}`)}
+        ${row('Ramp/blink in progress', d.ramp_pending ? pill('yes', 'warn') : pill('no', 'off'))}
+        ${row('VBUS', `${d.vbus_mv}mV`)}
+        ${row('LED voltage', `${d.led_voltage_mv}mV`)}
+      </div>
+      <div class="center-row"><button class="btn" onclick="showStatus(${i})">Get status</button></div>
+
+      <hr class="divider">
+
+      <div class="section-label">Light controls</div>
+      <div class="controls">
+        <div class="controls-row">
+          <button class="btn btn-fill" onclick="cmd(${i},'on')">On</button>
+          <button class="btn btn-fill" onclick="cmd(${i},'off')">Off</button>
+          <button class="btn btn-fill" onclick="cmd(${i},'identify')">Identify</button>
+        </div>
+        <div class="controls-row dim-row">
+          <span class="dim-label">Dimming</span>
+          <div class="dim-wrap">
+            <span class="dim-tip" id="dim-tip-${i}">${d.dim_percent}%</span>
+            <input type="range" min="0" max="100" step="1" value="${d.dim_percent}"
+                   oninput="dimSliderInput(${i}, this)" onchange="dimSliderCommit(${i}, this)">
+          </div>
+        </div>
+      </div>
+
+      <hr class="divider">
+      
+      <div class="section-label section-label-sub">Admin controls</div>
+      <div class="controls">
+        <div class="controls-row">
+          <button class="btn btn-danger btn-fill" onclick="cmd(${i},'reboot')">Reboot</button>
+          <button class="btn btn-danger btn-fill" onclick="factoryReset(${i})">Factory reset</button>
+          <button class="btn btn-danger btn-fill" onclick="changeSecret(${i})">Change secret</button>
+        </div>
+      </div>
+
+      <hr class="divider">
+
+      <div class="section-label">OTA</div>
+      <div class="ota">
+        <div class="ota-row">
+          <input type="file" id="ota-file-${i}" accept=".bin">
+          <button class="btn" onclick="uploadOta(${i})" id="ota-btn-${i}">Upload firmware</button>
+        </div>
+        <div class="ota-progress" id="ota-progress-${i}"><div class="ota-bar" id="ota-bar-${i}">0%</div></div>
+      </div>
+
+      <div class="msg" id="msg-${i}"></div>
+    </div>`;
+  }).join('');
+}
+
+const MSG_DISPLAY_MS = 2000; // how long a card's status message stays visible before auto-hiding
+const msgTimers = {}; // per-card index -> pending setTimeout id, so a fast second message doesn't get hidden early by the first one's timer
+
+function showMsg(i, text, ok) {
+  const el = document.getElementById(`msg-${i}`);
+  el.textContent = text;
+  el.className = `msg show ${ok ? 'ok' : 'err'}`;
+
+  if (msgTimers[i]) clearTimeout(msgTimers[i]);
+  msgTimers[i] = setTimeout(() => {
+    const current = document.getElementById(`msg-${i}`); // re-fetch -- renderDevices() may have rebuilt the DOM since this timer was set
+    if (current) current.classList.remove('show');
+    delete msgTimers[i];
+  }, MSG_DISPLAY_MS);
+}
+
+async function scanDevices() {
+  const btn = document.getElementById('scanBtn');
+  btn.disabled = true;
+  btn.textContent = 'Scanning...';
+  try {
+    const bcast = document.getElementById('bcast').value.trim();
+    const url = '/api/scan' + (bcast ? `?broadcast=${encodeURIComponent(bcast)}` : '');
+    const resp = await fetch(url);
+    const data = await resp.json();
+    devices = data.devices || [];
+    renderDevices();
+  } catch (e) {
+    document.getElementById('devices').innerHTML = `<div class="empty">Scan failed: ${e}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Scan network';
+  }
+}
+
+async function refreshOne(i) {
+  const d = devices[i];
+  const resp = await fetch(`/api/devices/${d.source_ip}/info`);
+  if (resp.ok) {
+    devices[i] = await resp.json();
+    renderDevices();
+  }
+  return resp.ok;
+}
+
+async function showStatus(i) {
+  const d = devices[i];
+  const ok = await refreshOne(i);
+  if (!ok) showMsg(i, 'Failed to fetch status.', false);
+}
+
+function promptForSecret(message) {
+  return new Promise((resolve) => {
+    const dlg = document.getElementById('secretDialog');
+    document.getElementById('secretDialogMsg').textContent = message;
+    const input = document.getElementById('secretDialogInput');
+    input.value = '';
+    dlg.showModal();
+    const ok = document.getElementById('secretDialogOk');
+    const onOk = () => { dlg.close(); ok.removeEventListener('click', onOk); resolve(input.value.trim() || null); };
+    ok.addEventListener('click', onOk);
+    dlg.addEventListener('cancel', () => resolve(null), { once: true });
+  });
+}
+
+async function postJson(url, body) {
+  const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  const data = await resp.json().catch(() => ({}));
+  return { ok: resp.ok, status: resp.status, data };
+}
+
+// Live tooltip while dragging the dim slider -- oninput fires continuously
+// during the drag (no command sent yet, just the tooltip); onchange fires
+// once on release, which is when dimSliderCommit() actually sends DIM.
+function dimSliderInput(i, el) {
+  const tip = document.getElementById(`dim-tip-${i}`);
+  tip.textContent = `${el.value}%`;
+  tip.classList.add('show');
+  const pct = (el.value - el.min) / (el.max - el.min);
+  const thumbWidth = 16; // approximate -- native range thumbs aren't queryable, this is close enough across browsers
+  const left = thumbWidth / 2 + pct * (el.offsetWidth - thumbWidth);
+  tip.style.left = `${left}px`;
+}
+
+function dimSliderCommit(i, el) {
+  document.getElementById(`dim-tip-${i}`).classList.remove('show');
+  cmd(i, 'dim', { percent: +el.value });
+}
+
+async function cmd(i, action, extra) {
+  const d = devices[i];
+  let secretHex = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const body = Object.assign({}, extra, secretHex ? { secret_hex: secretHex } : {});
+    const { ok, status, data } = await postJson(`/api/devices/${d.source_ip}/${action}`, body);
+    if (ok) {
+      // Refresh BEFORE showing the message, not after -- refreshOne()
+      // calls renderDevices(), which rebuilds this card's whole innerHTML
+      // (including a fresh, empty .msg element) and would otherwise wipe
+      // the message out right after showMsg() set it, well before its
+      // 2s auto-hide timer ever got a chance to run it out naturally.
+      await refreshOne(i);
+      if (data.applied) showMsg(i, `${action}: applied.`, true);
+      else if (data.pending) showMsg(i, `${action}: accepted, will apply once power is confirmed.`, true);
+      else showMsg(i, `${action}: refused (${data.status}).`, false);
+      return;
+    }
+    if (status === 401 && data.error === 'auth_needed' && attempt === 0) {
+      secretHex = await promptForSecret(`No known admin secret works for ${d.serial}. Enter one to try:`);
+      if (!secretHex) { showMsg(i, 'Cancelled -- no secret provided.', false); return; }
+      continue;
+    }
+    showMsg(i, data.message || `${action} failed (HTTP ${status}).`, false);
+    return;
+  }
+}
+
+async function factoryReset(i) {
+  const d = devices[i];
+  const typed = prompt(`Type the exact serial to confirm FACTORY_RESET (${d.serial}):`);
+  if (typed !== d.serial) { showMsg(i, 'Cancelled -- serial did not match.', false); return; }
+  await cmd(i, 'factory_reset', { confirm_serial: typed });
+}
+
+async function changeSecret(i) {
+  const d = devices[i];
+  const choice = confirm('OK = generate a random secret.\nCancel = type one in.');
+  let newSecretHex = null;
+  if (!choice) {
+    const typed = prompt('New admin secret (64 hex characters):');
+    if (!typed) return;
+    newSecretHex = typed.trim();
+  }
+  let secretHex = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const body = Object.assign({}, newSecretHex ? { new_secret_hex: newSecretHex } : {}, secretHex ? { secret_hex: secretHex } : {});
+    const { ok, status, data } = await postJson(`/api/devices/${d.source_ip}/change_secret`, body);
+    if (ok) {
+      showMsg(i, `Secret changed. New secret: ${data.new_secret_hex}`, true);
+      return;
+    }
+    if (status === 401 && data.error === 'auth_needed' && attempt === 0) {
+      secretHex = await promptForSecret(`No known admin secret works for ${d.serial}. Enter the CURRENT one to try:`);
+      if (!secretHex) { showMsg(i, 'Cancelled -- no secret provided.', false); return; }
+      continue;
+    }
+    showMsg(i, data.message || `change_secret failed (HTTP ${status}).`, false);
+    return;
+  }
+}
+
+// OTA -- pushes a .bin over an HTTP multipart upload to the backend,
+// which then relays it to the device over the admin UDP channel (see
+// driverpoe.client.AdminClient.ota_update()); this page never speaks the
+// device protocol directly. While the upload is in flight, a separate
+// poll loop reads /ota/progress to animate the bar -- the upload response
+// itself only arrives once the whole transfer (and the device's final
+// validation) is done. NOTE: picking a file, then clicking any OTHER
+// button on ANY card before hitting "Upload firmware", clears the file
+// picker -- this page always rebuilds the whole card list from scratch
+// (renderDevices()), which resets file inputs like any other DOM node.
+async function pollOtaProgress(i, ip, stopFlag) {
+  const bar = document.getElementById(`ota-bar-${i}`);
+  const wrap = document.getElementById(`ota-progress-${i}`);
+  wrap.classList.add('show');
+  while (!stopFlag.stopped) {
+    try {
+      const resp = await fetch(`/api/devices/${ip}/ota/progress`);
+      if (resp.ok) {
+        const p = await resp.json();
+        const pct = p.total_bytes ? Math.round(100 * p.bytes_sent / p.total_bytes) : 0;
+        bar.style.width = pct + '%';
+        bar.textContent = `${pct}% (${p.state})`;
+      }
+    } catch (e) { /* keep polling -- a single missed poll doesn't matter */ }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+}
+
+async function uploadOta(i) {
+  const d = devices[i];
+  const fileInput = document.getElementById(`ota-file-${i}`);
+  const file = fileInput.files[0];
+  if (!file) { showMsg(i, 'Choose a .bin file first.', false); return; }
+
+  const btn = document.getElementById(`ota-btn-${i}`);
+  btn.disabled = true;
+  const stopFlag = { stopped: false };
+  const pollPromise = pollOtaProgress(i, d.source_ip, stopFlag);
+
+  try {
+    let secretHex = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const form = new FormData();
+      form.append('file', file);
+      if (secretHex) form.append('secret_hex', secretHex);
+
+      const resp = await fetch(`/api/devices/${d.source_ip}/ota/upload`, { method: 'POST', body: form });
+      const data = await resp.json().catch(() => ({}));
+
+      if (resp.ok) {
+        if (data.applied) {
+          showMsg(i, 'Firmware validated and staged. Reboot to apply it.', true);
+          if (confirm(`${d.serial}: OTA staged successfully. Reboot now to apply it?`)) {
+            await cmd(i, 'reboot');
+          }
+        } else {
+          showMsg(i, `Device refused the image (${data.status}).`, false);
+        }
+        return;
+      }
+      if (resp.status === 401 && data.error === 'auth_needed' && attempt === 0) {
+        secretHex = await promptForSecret(`No known admin secret works for ${d.serial}. Enter one to try:`);
+        if (!secretHex) { showMsg(i, 'Cancelled -- no secret provided.', false); return; }
+        continue;
+      }
+      showMsg(i, data.message || `OTA upload failed (HTTP ${resp.status}).`, false);
+      return;
+    }
+  } finally {
+    stopFlag.stopped = true;
+    await pollPromise;
+    btn.disabled = false;
+  }
+}
+</script>
+</body>
+</html>

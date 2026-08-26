@@ -22,13 +22,15 @@ build/
 *.o
 *.a
 *.out
-*.exe # For any host-side utilities compiled on Windows
+# For any host-side utilities compiled on Windows
+*.exe
 
 # ESP-IDF specific build outputs
 *.bin
 *.elf
 *.map
-flasher_args.json # Generated in build directory
+# Generated in the build directory
+flasher_args.json
 sdkconfig.old
 sdkconfig
 
@@ -71,11 +73,15 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 
-# Device-identity master secret -- never commit this, see tools/lumtool.py
-tools/secret.txt
+# Per-unit admin secrets lumtool.py has changed away from the factory
+# default -- plaintext, never commit this, see tools/lumtool.py
+tools/admin_secrets.json
 
 # User-specific configuration files
 *.user
-*.workspace # General workspace files, can be from various tools
-*.suo       # Visual Studio Solution User Options
-*.sln.docstates # Visual Studio
+# General workspace files, can be from various tools
+*.workspace
+# Visual Studio Solution User Options
+*.suo
+# Visual Studio Solution Document States
+*.sln.docstates

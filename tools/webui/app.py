@@ -1,0 +1,442 @@
+"""DriverPoE local web UI -- FastAPI backend.
+
+Built entirely on top of the `driverpoe` package (../driverpoe/) -- no
+protocol/HMAC/AES-GCM logic of its own, and the admin secret never leaves
+this process: the browser only ever sends a secret it wants tried
+(optional, only needed the first time a unit is talked to, or after a
+FACTORY_RESET), never receives one back. See README.md "Interface web"
+for the full picture.
+
+Run from inside tools/:
+
+    pip install fastapi "uvicorn[standard]" cryptography
+    python -m webui.app
+
+...or, equivalently, `uvicorn webui.app:app --reload` from inside tools/.
+Then open http://127.0.0.1:8000/ .
+
+This is a LOCAL tool, deliberately not hardened for exposure on an
+untrusted network: it has no authentication of its own (anyone who can
+reach this HTTP server can send authenticated admin commands to any
+DriverPoE unit it can reach, exactly like tools/lumtool.py can) -- bind it
+to localhost/a trusted management network only, same posture as the admin
+UDP channel itself (see README.md "Canal de administração").
+"""
+from __future__ import annotations
+
+import socket
+import threading
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI, File, Form, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
+
+try:
+    import psutil
+except ImportError:  # only needed for /api/interfaces (the broadcast-address dropdown)
+    psutil = None
+
+from driverpoe import discovery
+from driverpoe.client import (
+    AdminClient,
+    AuthError,
+    CommandRefusedError,
+    DeviceTimeoutError,
+    DriverPoEError,
+    MissingDependencyError,
+    OtaTransferError,
+    find_working_secret,
+)
+from driverpoe.models import CommandResult, DeviceInfo
+from driverpoe.protocol import DEFAULT_PORT, DEFAULT_RAMP_MS, DEFAULT_TIMEOUT, SECRET_LEN, ProtocolVersionMismatchError
+from driverpoe.secrets import DEFAULT_SECRETS_FILE, JsonFileSecretStore
+
+app = FastAPI(title="DriverPoE", description="Local admin UI for DriverPoE luminaires")
+
+# Same secret store lumtool.py's CLI uses by default (tools/admin_secrets.json,
+# gitignored) -- a secret changed through one tool is immediately usable
+# from the other, no manual syncing.
+_secret_store = JsonFileSecretStore(DEFAULT_SECRETS_FILE)
+
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+# In-memory OTA progress, keyed by device IP -- lets the browser poll
+# /ota/progress while a (synchronous, potentially several-second) upload
+# is in flight on a worker thread, without needing WebSockets/SSE. Never
+# persisted, never holds anything secret. Plain dict assignment is enough
+# thread-safety here (CPython's GIL makes it atomic) -- this is a casual
+# local status readout, not a concurrency-critical path.
+_ota_progress: dict[str, dict[str, Any]] = {}
+
+
+class AuthNeeded(Exception):
+    """Neither a stored nor the factory-default secret worked, and the
+    request didn't supply one to try -- the frontend should prompt the
+    operator for one and resubmit with secret_hex set."""
+
+
+def _device_to_dict(info: DeviceInfo) -> dict[str, Any]:
+    """JSON-safe view of a DeviceInfo -- never includes anything
+    secret-related (there's nothing secret in DeviceInfo to begin with)."""
+    return {
+        "serial": info.serial,
+        "source_ip": info.source_ip,
+        "mac": info.mac_str,
+        "fw_version": info.fw_version,
+        "ip": info.ip,
+        "uptime_s": info.uptime_s,
+        "reset_reason": info.reset_reason,
+        "poe_ready": info.poe_ready,
+        "poe_source": info.poe_source,
+        "poe_cdb_confirmed": info.poe_cdb_confirmed,
+        "poe_t2p_confirmed": info.poe_t2p_confirmed,
+        "poe_vbus_confirmed": info.poe_vbus_confirmed,
+        "power_blocking_reason": info.power_blocking_reason,
+        "driver_on": info.driver_on,
+        "desired_on": info.desired_on,
+        "dim_percent": info.dim_percent,
+        "ramp_pending": info.ramp_pending,
+        "vbus_mv": info.vbus_mv,
+        "led_voltage_mv": info.led_voltage_mv,
+    }
+
+
+def _result_to_dict(result: CommandResult) -> dict[str, Any]:
+    return {
+        "command": result.command,
+        "serial": result.serial,
+        "status": result.status.name,
+        "accepted": result.accepted,
+        "applied": result.applied,
+        "pending": result.pending,
+    }
+
+
+def _resolve_secret(client: AdminClient, serial: str, secret_hex: str | None) -> bytes:
+    """Tries the stored/factory-default secret first; if both fail and
+    secret_hex was supplied, tries that (and remembers it on success, so
+    the next request against this unit doesn't need it again). Raises
+    AuthNeeded if nothing worked and no secret_hex was given -- the
+    frontend's cue to ask the operator for one."""
+    manual_was_used = False
+
+    def manual_provider() -> bytes:
+        nonlocal manual_was_used
+        manual_was_used = True
+        if not secret_hex:
+            raise AuthNeeded()
+        try:
+            secret = bytes.fromhex(secret_hex)
+        except ValueError:
+            raise HTTPException(400, "secret_hex must be a 64-character hex string")
+        if len(secret) != SECRET_LEN:
+            raise HTTPException(400, f"secret must be {SECRET_LEN} bytes; got {len(secret)}")
+        return secret
+
+    try:
+        secret, _nonce = find_working_secret(client, serial, _secret_store, manual_secret_provider=manual_provider)
+    except AuthError:
+        if manual_was_used and secret_hex:
+            raise HTTPException(401, "The provided admin secret was rejected by the device")
+        raise
+    if manual_was_used and secret_hex:
+        _secret_store.set(serial, secret)
+    return secret
+
+
+def _error_response(e: Exception) -> JSONResponse:
+    if isinstance(e, AuthNeeded):
+        return JSONResponse(status_code=401, content={"error": "auth_needed",
+                             "message": "No working admin secret for this unit -- supply one (secret_hex) to try."})
+    if isinstance(e, DeviceTimeoutError):
+        return JSONResponse(status_code=504, content={"error": "timeout", "message": str(e)})
+    if isinstance(e, ProtocolVersionMismatchError):
+        return JSONResponse(status_code=409, content={
+            "error": "version_mismatch",
+            "message": str(e),
+            "device_version": e.got,
+            "package_version": e.expected,
+        })
+    if isinstance(e, CommandRefusedError):
+        return JSONResponse(status_code=409, content={"error": "refused", "status": e.status.name, "message": str(e)})
+    if isinstance(e, MissingDependencyError):
+        return JSONResponse(status_code=501, content={"error": "missing_dependency", "message": str(e)})
+    if isinstance(e, OtaTransferError):
+        return JSONResponse(status_code=409, content={"error": "ota_transfer_failed", "message": str(e)})
+    if isinstance(e, DriverPoEError):
+        return JSONResponse(status_code=400, content={"error": "driverpoe_error", "message": str(e)})
+    raise e
+
+
+class OnOffRequest(BaseModel):
+    ramp_ms: int = DEFAULT_RAMP_MS
+    secret_hex: str | None = None
+
+
+class DimRequest(BaseModel):
+    percent: int
+    ramp_ms: int = DEFAULT_RAMP_MS
+    secret_hex: str | None = None
+
+
+class SecretOnlyRequest(BaseModel):
+    secret_hex: str | None = None
+
+
+class FactoryResetRequest(BaseModel):
+    confirm_serial: str
+    secret_hex: str | None = None
+
+
+class ChangeSecretRequest(BaseModel):
+    new_secret_hex: str | None = None  # None -> device generates/we generate a random one
+    secret_hex: str | None = None      # current secret, if neither stored nor factory default works
+
+
+# ======================================================================= #
+# Discovery
+# ======================================================================= #
+def _broadcast_for(address: str, netmask: str) -> str | None:
+    """IPv4 broadcast address for a given (address, netmask) pair --
+    address | ~netmask, octet by octet. None if either isn't a well-formed
+    dotted-quad (psutil can report non-IPv4-looking values for some
+    virtual adapters)."""
+    try:
+        ip = [int(o) for o in address.split(".")]
+        mask = [int(o) for o in netmask.split(".")]
+    except ValueError:
+        return None
+    if len(ip) != 4 or len(mask) != 4:
+        return None
+    return ".".join(str(ip[i] | (~mask[i] & 0xFF)) for i in range(4))
+
+
+@app.get("/api/interfaces")
+def api_interfaces():
+    """Every local IPv4 interface's broadcast address -- powers the
+    broadcast-address dropdown in the UI. Needed because guessing a single
+    "the" broadcast address (discovery.guess_broadcast_address(), based on
+    whichever interface the OS would pick for internet-bound traffic) is
+    wrong on a multi-homed machine: e.g. a wired connection to one router
+    while still on Wi-Fi to the router the luminaire is actually on -- the
+    OS usually prefers wired for its default route, so the auto-guess
+    silently points at the wrong network. Loopback (127.0.0.0/8) and
+    link-local/APIPA (169.254.0.0/16 -- an interface with no real DHCP
+    lease) are excluded; they're never useful here."""
+    if psutil is None:
+        return {"interfaces": [], "error": "psutil not installed -- pip install psutil"}
+    seen = set()
+    results = []
+    for name, addrs in psutil.net_if_addrs().items():
+        for addr in addrs:
+            if addr.family != socket.AF_INET:
+                continue
+            ip = addr.address
+            if not ip or ip.startswith("127.") or ip.startswith("169.254."):
+                continue
+            broadcast = addr.broadcast or (_broadcast_for(ip, addr.netmask) if addr.netmask else None)
+            if not broadcast or broadcast in seen:
+                continue
+            seen.add(broadcast)
+            results.append({"interface": name, "address": ip, "netmask": addr.netmask, "broadcast": broadcast})
+    return {"interfaces": results}
+
+
+@app.get("/api/scan")
+def api_scan(broadcast: str | None = None, timeout: float = DEFAULT_TIMEOUT):
+    bcast = broadcast or discovery.guess_broadcast_address()
+    try:
+        results = discovery.broadcast_info(bcast, DEFAULT_PORT, timeout)
+    except OSError as e:
+        raise HTTPException(400, f"Broadcast to {bcast} failed: {e}")
+    results.sort(key=lambda info: info.serial)
+    return {"broadcast": bcast, "devices": [_device_to_dict(info) for info in results]}
+
+
+@app.get("/api/devices/{ip}/info")
+def api_device_info(ip: str, port: int = DEFAULT_PORT, timeout: float = DEFAULT_TIMEOUT):
+    try:
+        with AdminClient(ip, port, timeout) as client:
+            info = client.info()
+    except Exception as e:
+        return _error_response(e)
+    return _device_to_dict(info)
+
+
+# ======================================================================= #
+# Commands
+# ======================================================================= #
+@app.post("/api/devices/{ip}/on")
+def api_on(ip: str, body: OnOffRequest, port: int = DEFAULT_PORT):
+    try:
+        with AdminClient(ip, port, DEFAULT_TIMEOUT) as client:
+            info = client.info()
+            secret = _resolve_secret(client, info.serial, body.secret_hex)
+            result = client.on(secret, info.serial, body.ramp_ms)
+    except Exception as e:
+        return _error_response(e)
+    return _result_to_dict(result)
+
+
+@app.post("/api/devices/{ip}/off")
+def api_off(ip: str, body: OnOffRequest, port: int = DEFAULT_PORT):
+    try:
+        with AdminClient(ip, port, DEFAULT_TIMEOUT) as client:
+            info = client.info()
+            secret = _resolve_secret(client, info.serial, body.secret_hex)
+            result = client.off(secret, info.serial, body.ramp_ms)
+    except Exception as e:
+        return _error_response(e)
+    return _result_to_dict(result)
+
+
+@app.post("/api/devices/{ip}/dim")
+def api_dim(ip: str, body: DimRequest, port: int = DEFAULT_PORT):
+    if not 0 <= body.percent <= 100:
+        raise HTTPException(400, "percent must be 0-100")
+    try:
+        with AdminClient(ip, port, DEFAULT_TIMEOUT) as client:
+            info = client.info()
+            secret = _resolve_secret(client, info.serial, body.secret_hex)
+            result = client.dim(secret, info.serial, body.percent, body.ramp_ms)
+    except Exception as e:
+        return _error_response(e)
+    return _result_to_dict(result)
+
+
+@app.post("/api/devices/{ip}/identify")
+def api_identify(ip: str, body: SecretOnlyRequest, port: int = DEFAULT_PORT):
+    try:
+        with AdminClient(ip, port, DEFAULT_TIMEOUT) as client:
+            info = client.info()
+            secret = _resolve_secret(client, info.serial, body.secret_hex)
+            result = client.identify(secret, info.serial)
+    except Exception as e:
+        return _error_response(e)
+    return _result_to_dict(result)
+
+
+@app.post("/api/devices/{ip}/reboot")
+def api_reboot(ip: str, body: SecretOnlyRequest, port: int = DEFAULT_PORT):
+    try:
+        with AdminClient(ip, port, DEFAULT_TIMEOUT) as client:
+            info = client.info()
+            secret = _resolve_secret(client, info.serial, body.secret_hex)
+            result = client.reboot(secret, info.serial)
+    except Exception as e:
+        return _error_response(e)
+    return _result_to_dict(result)
+
+
+@app.post("/api/devices/{ip}/factory_reset")
+def api_factory_reset(ip: str, body: FactoryResetRequest, port: int = DEFAULT_PORT):
+    try:
+        with AdminClient(ip, port, DEFAULT_TIMEOUT) as client:
+            info = client.info()
+            # Explicit confirmation, mirroring the CLI's "type the exact
+            # serial" prompt -- a destructive action must never fire from
+            # a single accidental click (TODO Fase 2.7: "preservar
+            # confirmação explícita do lado cliente").
+            if body.confirm_serial != info.serial:
+                raise HTTPException(400, f"confirm_serial must exactly match the device's serial ({info.serial})")
+            secret = _resolve_secret(client, info.serial, body.secret_hex)
+            result = client.factory_reset(secret, info.serial)
+            if result.applied:
+                _secret_store.delete(info.serial)  # device reverted its secret to the factory default too
+    except Exception as e:
+        return _error_response(e)
+    return _result_to_dict(result)
+
+
+@app.post("/api/devices/{ip}/change_secret")
+def api_change_secret(ip: str, body: ChangeSecretRequest, port: int = DEFAULT_PORT):
+    new_secret = None
+    if body.new_secret_hex:
+        try:
+            new_secret = bytes.fromhex(body.new_secret_hex)
+        except ValueError:
+            raise HTTPException(400, "new_secret_hex must be a 64-character hex string")
+        if len(new_secret) != SECRET_LEN:
+            raise HTTPException(400, f"new secret must be {SECRET_LEN} bytes; got {len(new_secret)}")
+    try:
+        with AdminClient(ip, port, DEFAULT_TIMEOUT) as client:
+            info = client.info()
+            secret = _resolve_secret(client, info.serial, body.secret_hex)
+            result, applied_secret = client.change_secret(secret, info.serial, new_secret)
+            if result.applied:
+                _secret_store.set(info.serial, applied_secret)
+    except Exception as e:
+        return _error_response(e)
+    # The new secret is returned ONCE, directly to the operator who just
+    # requested the change -- this is the one deliberate exception to
+    # "never expose the admin secret to the frontend": the browser that
+    # asked for a new secret needs to see it to hand it to whoever
+    # installs/labels the unit. It is never returned by any other
+    # endpoint, never logged, and this response is never cached (no
+    # GET involved).
+    return {**_result_to_dict(result), "new_secret_hex": applied_secret.hex() if result.applied else None}
+
+
+# ======================================================================= #
+# OTA
+# ======================================================================= #
+@app.post("/api/devices/{ip}/ota/upload")
+def api_ota_upload(ip: str, file: bytes = File(...), secret_hex: str | None = Form(None), port: int = DEFAULT_PORT):
+    """Pushes `file`'s bytes to the device as a new firmware image and
+    stages it (does NOT reboot -- see driverpoe.client.AdminClient.
+    ota_update()'s docstring). A plain `def` (not `async def`) on purpose:
+    FastAPI runs synchronous routes in a worker thread automatically, so
+    this potentially multi-second blocking UDP transfer never stalls the
+    event loop -- a concurrent GET to /ota/progress below keeps working
+    the whole time. `file: bytes = File(...)` (not UploadFile) for the
+    same reason -- UploadFile's async read API doesn't fit a sync route,
+    and firmware images here are small enough (under a couple MB) to hold
+    in memory whole without concern."""
+    if not file:
+        raise HTTPException(400, "uploaded file is empty")
+
+    _ota_progress[ip] = {"state": "starting", "bytes_sent": 0, "total_bytes": len(file), "message": ""}
+    try:
+        with AdminClient(ip, port, DEFAULT_TIMEOUT) as client:
+            info = client.info()
+            secret = _resolve_secret(client, info.serial, secret_hex)
+            _ota_progress[ip]["state"] = "uploading"
+
+            def progress_cb(sent: int, total: int) -> None:
+                _ota_progress[ip].update(bytes_sent=sent, total_bytes=total)
+
+            result = client.ota_update(secret, info.serial, file, progress_callback=progress_cb)
+    except Exception as e:
+        _ota_progress[ip] = {"state": "error", "bytes_sent": _ota_progress.get(ip, {}).get("bytes_sent", 0),
+                              "total_bytes": len(file), "message": str(e)}
+        return _error_response(e)
+
+    if result.applied:
+        _ota_progress[ip] = {"state": "done", "bytes_sent": len(file), "total_bytes": len(file),
+                              "message": "Image validated and staged -- reboot to apply."}
+    else:
+        _ota_progress[ip] = {"state": "error", "bytes_sent": len(file), "total_bytes": len(file),
+                              "message": f"Device refused the image: {result.status.name}"}
+    return _result_to_dict(result)
+
+
+@app.get("/api/devices/{ip}/ota/progress")
+def api_ota_progress(ip: str):
+    """Polled by the browser while an /ota/upload request for this same
+    IP is in flight on another thread -- see the comment above."""
+    return _ota_progress.get(ip, {"state": "idle", "bytes_sent": 0, "total_bytes": 0, "message": ""})
+
+
+# ======================================================================= #
+# Frontend (single static page, vanilla JS -- see static/index.html)
+# ======================================================================= #
+@app.get("/")
+def index():
+    return FileResponse(_STATIC_DIR / "index.html")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("webui.app:app", host="127.0.0.1", port=8000, reload=False)

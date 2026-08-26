@@ -1,3 +1,6 @@
+/** @file poe_luminaire_main.c
+ * @brief Application entry point: wires up all components and starts the firmware.
+ */
 #include <stdint.h>
 
 #include "freertos/FreeRTOS.h"
@@ -19,6 +22,11 @@ static const char *TAG = "MAIN";
 static bool s_first_power_ready_seen;
 static esp_timer_handle_t s_poweron_settle_timer;
 
+/**
+ * @brief One-shot timer callback that resumes the driver after the power-on settle delay.
+ * @param arg Power source, passed as a tps2378_source_t.
+ * @return None.
+ */
 static void poweron_settle_cb(void *arg)
 {
     tps2378_source_t source = (tps2378_source_t)(intptr_t)arg;
@@ -31,6 +39,12 @@ static void poweron_settle_cb(void *arg)
     hv9910_enable(HV9910_DEFAULT_RAMP_MS, false);
 }
 
+/**
+ * @brief tps2378 power-ready callback: resumes the driver if it was persisted on.
+ * @param source Detected power source.
+ * @param ctx Unused.
+ * @return None.
+ */
 static void on_poe_power_ready(tps2378_source_t source, void *ctx)
 {
     (void)ctx;
@@ -60,27 +74,21 @@ static void on_poe_power_ready(tps2378_source_t source, void *ctx)
     hv9910_enable(HV9910_DEFAULT_RAMP_MS, false);
 }
 
+/**
+ * @brief tps2378 power-lost callback: cuts the driver immediately.
+ * @param ctx Unused.
+ * @return None.
+ */
 static void on_poe_power_lost(void *ctx)
 {
     (void)ctx;
     hv9910_emergency_disable();
 }
 
-/* Completes the OTA rollback contract that CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
- * (sdkconfig.defaults) and the ota_0/ota_1 partition table (partitions.csv)
- * set up but don't finish on their own: whenever the running image is still
- * ESP_OTA_IMG_PENDING_VERIFY (the state the bootloader leaves it in right
- * after a boot-partition switch -- currently that only happens via
- * esptool/idf.py flash writing directly to a slot with rollback already
- * enabled, since no esp_ota_* / esp_https_ota update client exists yet), it
- * must be confirmed with esp_ota_mark_app_valid_cancel_rollback() or the
- * bootloader will roll back to the other slot the next time this one
- * resets before confirming. No self-test worth gating this on exists yet,
- * so this confirms unconditionally and early -- getting this far (past
- * app_main() being entered at all) is the only bar there currently is.
- * esp_ota_get_state_partition() returning anything other than ESP_OK means
- * the running partition isn't OTA-managed (e.g. a "factory" image from the
- * old single-slot partition table) -- nothing to confirm in that case. */
+/**
+ * @brief Confirms the running OTA image if it's still pending verification.
+ * @return None.
+ */
 static void confirm_app_if_pending_verify(void)
 {
     const esp_partition_t *running = esp_ota_get_running_partition();
@@ -100,6 +108,10 @@ static void confirm_app_if_pending_verify(void)
     }
 }
 
+/**
+ * @brief Application entry point.
+ * @return None.
+ */
 void app_main(void)
 {
     esp_log_level_set("MAIN", ESP_LOG_INFO);
@@ -132,8 +144,10 @@ void app_main(void)
     };
     hv9910_init(&hv9910_cfg);
 
+    static const uint8_t admin_default_secret[DEVID_SECRET_LEN] = ADMIN_DEFAULT_SECRET;
     devid_config_t devid_cfg = {
         .model_prefix = DEVID_MODEL_PREFIX,
+        .factory_default_secret = admin_default_secret,
     };
     devid_init(&devid_cfg);
 
@@ -163,6 +177,7 @@ void app_main(void)
         .ref_clk_pin = PIN_ETH_REF_CLK,
         .phy_reset_pin = PIN_ETH_PHY_RESET,
         .phy_addr = ETH_PHY_ADDR,
+        .hostname = devid_get_model_prefix(),
     };
     esp_err_t eth_err = eth_bringup(&eth_cfg);
     if (eth_err == ESP_OK) {

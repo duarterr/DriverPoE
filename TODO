@@ -1,8 +1,3 @@
-Não resolveu.
-
-Fazer:
-- Reverter para a previsão de OTA mas ainda sem a implementação;
-- Commit no código;
-- Eliminar absolutamente tudo, deixando apenas o negociador e o LED driver.
-- Terminou de negociar, espera 2s e liga o driver de LED.
-- O objetivo é ver se assim o driver de led sempre liga quando o cabo é conectado
+Recomentar todo o código no padrão doxygen. Padronizar em ingles.
+Não incluir comentários grandes dentro de funções e etc. Apenas no começo do arquivo uma descrição breve do que ele faz. nas funções, comentar o header dela, com parametros e etc.
+Nas structs e etc, apenas um comentário simples como " gpio_num_t mdc_pin;       /**< GPIO MDC. */" de preferencia compativel com doxygen

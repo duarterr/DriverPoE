@@ -1,0 +1,342 @@
+"""Interactive command-line interface, built entirely on top of the
+driverpoe package -- no protocol/HMAC/socket code of its own. This is
+where every input()/print()/getpass() in this package lives; nothing
+above this module does interactive I/O.
+
+Preserves the discovery -> selection -> per-device-menu ->
+destructive-action-confirmation UX the original tools/lumtool.py had.
+"""
+from __future__ import annotations
+
+import getpass
+import socket
+from pathlib import Path
+
+from . import discovery
+from .client import (
+    AdminClient,
+    CommandRefusedError,
+    DeviceTimeoutError,
+    DriverPoEError,
+    connect,
+)
+from .models import DeviceInfo
+from .protocol import DEFAULT_PORT, DEFAULT_RAMP_MS, DEFAULT_TIMEOUT, SECRET_LEN
+from .secrets import DEFAULT_SECRETS_FILE, JsonFileSecretStore, SecretStore
+
+
+def _prompt_admin_secret(serial: str) -> bytes:
+    """The manual_secret_provider passed to find_working_secret() when
+    neither a saved nor the factory-default secret works -- the only
+    place this CLI asks for a secret via a hidden prompt instead of a
+    command-line argument (which would end up in shell history / `ps`)."""
+    typed = getpass.getpass(f"Admin secret for {serial} (64 hex chars, input hidden): ").strip()
+    try:
+        secret = bytes.fromhex(typed)
+    except ValueError:
+        raise SystemExit("Secret must be a 64-character hex string.")
+    if len(secret) != SECRET_LEN:
+        raise SystemExit(f"Secret must be {SECRET_LEN} bytes; got {len(secret)}.")
+    return secret
+
+
+def _connect(ip: str, store: SecretStore, port: int = DEFAULT_PORT, timeout: float = DEFAULT_TIMEOUT):
+    try:
+        return connect(ip, store, manual_secret_provider=lambda: _prompt_admin_secret("this unit"),
+                        port=port, timeout=timeout)
+    except DeviceTimeoutError:
+        raise SystemExit("Timed out waiting for the unit's response -- right IP/port? Unit powered and reachable?")
+
+
+# ======================================================================= #
+# Printing
+# ======================================================================= #
+def print_info(info: DeviceInfo) -> None:
+    print(f"Serial:               {info.serial}")
+    print(f"MAC:                  {info.mac_str}")
+    print(f"Firmware:             {info.fw_version}")
+    print(f"IP:                   {info.ip}  (responded from {info.source_ip})")
+    print(f"Uptime:               {info.uptime_s}s")
+    print(f"Reset reason:         {info.reset_reason}")
+    print(f"PoE ready:            {info.poe_ready} (source: {info.poe_source})")
+    if not info.poe_ready:
+        print(f"  Blocked on:          {info.power_blocking_reason}")
+        print(f"  CDB/T2P/VBUS ok:     {info.poe_cdb_confirmed}/{info.poe_t2p_confirmed}/{info.poe_vbus_confirmed}")
+    print(f"Driver on (actual):   {info.driver_on} (dim={info.dim_percent}%)")
+    print(f"Driver on (desired):  {info.desired_on}{'  <- pending, will apply once power is confirmed' if info.desired_on and not info.driver_on else ''}")
+    if info.ramp_pending:
+        print("Ramp/blink in progress.")
+    print(f"VBUS:                 {info.vbus_mv}mV")
+    print(f"LED voltage:          {info.led_voltage_mv}mV")
+
+
+def print_scan_results(results: list[DeviceInfo]) -> None:
+    if not results:
+        print("No unit responded.")
+        return
+    for i, info in enumerate(results, 1):
+        ready = "power ready" if info.poe_ready else f"NOT ready ({info.power_blocking_reason})"
+        print(f"  [{i}] {info.serial}  ip={info.source_ip}  fw={info.fw_version}  ({ready})")
+
+
+# ======================================================================= #
+# Actions -- each takes (ip, serial, store) and does exactly one thing,
+# printing its own result/error. Never raises past this point (see
+# run_action() below, which is the single place that catches everything).
+# ======================================================================= #
+def action_info(ip: str, serial: str, store: SecretStore) -> None:
+    with AdminClient(ip) as client:
+        print_info(client.info())
+
+
+def action_identify(ip: str, serial: str, store: SecretStore) -> None:
+    client, info, secret = _connect(ip, store)
+    with client:
+        result = client.identify(secret, info.serial)
+        if result.applied:
+            print(f"{info.serial}: blinking for a few seconds.")
+        else:
+            print(f"{info.serial}: IDENTIFY refused ({result.status.name}).")
+
+
+def _prompt_ramp_ms() -> int:
+    raw = input(f"Ramp time in ms [{DEFAULT_RAMP_MS}]: ").strip()
+    return int(raw) if raw else DEFAULT_RAMP_MS
+
+
+def action_on(ip: str, serial: str, store: SecretStore) -> None:
+    client, info, secret = _connect(ip, store)
+    with client:
+        result = client.on(secret, info.serial, _prompt_ramp_ms())
+        if result.applied:
+            print(f"{info.serial}: turning on.")
+        elif result.pending:
+            print(f"{info.serial}: accepted -- will turn on once power is confirmed (not ready yet).")
+        else:
+            print(f"{info.serial}: ON refused ({result.status.name}).")
+
+
+def action_off(ip: str, serial: str, store: SecretStore) -> None:
+    client, info, secret = _connect(ip, store)
+    with client:
+        result = client.off(secret, info.serial, _prompt_ramp_ms())
+        if result.applied:
+            print(f"{info.serial}: turning off.")
+        else:
+            print(f"{info.serial}: OFF refused ({result.status.name}).")
+
+
+def action_dim(ip: str, serial: str, store: SecretStore) -> None:
+    percent_raw = input("Brightness percent (0-100): ").strip()
+    if not percent_raw:
+        print("Percent is required.")
+        return
+    try:
+        percent = int(percent_raw)
+    except ValueError:
+        print("Percent must be an integer.")
+        return
+    client, info, secret = _connect(ip, store)
+    with client:
+        try:
+            result = client.dim(secret, info.serial, percent, _prompt_ramp_ms())
+        except ValueError as e:
+            print(f"Error: {e}")
+            return
+        if result.applied:
+            print(f"{info.serial}: dimming to {percent}%.")
+        elif result.pending:
+            print(f"{info.serial}: accepted -- will apply {percent}% once power is confirmed (not ready yet).")
+        else:
+            print(f"{info.serial}: DIM refused ({result.status.name}).")
+
+
+def action_reboot(ip: str, serial: str, store: SecretStore) -> None:
+    client, info, secret = _connect(ip, store)
+    with client:
+        result = client.reboot(secret, info.serial)
+        if result.applied:
+            print(f"{info.serial}: reboot confirmed by the device.")
+        else:
+            print(f"{info.serial}: REBOOT refused ({result.status.name}).")
+
+
+def action_reset(ip: str, serial: str, store: SecretStore) -> None:
+    client, info, secret = _connect(ip, store)
+    with client:
+        typed = input(f"Type the exact serial to confirm the FACTORY_RESET ({info.serial}): ")
+        if typed.strip() != info.serial:
+            print("Serial doesn't match -- aborted, nothing was sent.")
+            return
+        result = client.factory_reset(secret, info.serial)
+        if not result.applied:
+            print(f"{info.serial}: FACTORY_RESET refused ({result.status.name}).")
+            return
+        # The device reverts its admin secret to the factory default as
+        # part of a FACTORY_RESET -- a locally saved custom secret for
+        # this serial is now stale.
+        store.delete(info.serial)
+        print(f"{info.serial}: FACTORY_RESET confirmed -- brightness memory and admin secret "
+              f"reverted to factory defaults.")
+
+
+def action_change_secret(ip: str, serial: str, store: SecretStore) -> None:
+    choice = input("New secret: [R]andom (recommended) or [T]ype one in? [R]: ").strip().lower()
+    new_secret = None
+    if choice == "t":
+        typed = getpass.getpass("New admin secret (64 hex chars, input hidden): ").strip()
+        try:
+            new_secret = bytes.fromhex(typed)
+        except ValueError:
+            print("Secret must be a 64-character hex string.")
+            return
+        if len(new_secret) != SECRET_LEN:
+            print(f"Secret must be {SECRET_LEN} bytes; got {len(new_secret)}.")
+            return
+
+    client, info, secret = _connect(ip, store)
+    with client:
+        result, applied_secret = client.change_secret(secret, info.serial, new_secret)
+        if not result.applied:
+            print(f"{info.serial}: CHANGE_SECRET refused ({result.status.name}).")
+            return
+        store.set(info.serial, applied_secret)
+        print(f"{info.serial}: admin secret changed.")
+        print(f"New secret: {applied_secret.hex()}")
+        print(f"Saved to {getattr(store, 'path', '(in-memory store)')} -- this tool will use it automatically from now on.")
+
+
+def run_action(handler, ip: str, serial: str, store: SecretStore) -> None:
+    """Runs one action_* handler against the selected device, keeping the
+    menu alive across every error class the package defines (plus
+    KeyboardInterrupt and, as a last resort, anything unexpected)."""
+    try:
+        handler(ip, serial, store)
+    except (DeviceTimeoutError, socket.timeout):
+        print("Timed out waiting for the unit's response -- right IP/port? Unit powered and reachable?")
+    except CommandRefusedError as e:
+        print(f"Error: {e}")
+    except (DriverPoEError, SystemExit) as e:
+        print(f"Error: {e}")
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+    except Exception as e:  # last resort -- keep the menu alive
+        print(f"Unexpected error: {e}")
+
+
+# ======================================================================= #
+# Interactive menu -- scan first, pick a luminaire from the list, then get
+# a device-specific menu with all its options (diskpart-style: "list" ->
+# "select" -> act on the selected item). Every unit is administrable from
+# the start (factory-default secret) -- there's no "unprovisioned" state.
+# ======================================================================= #
+def scan_devices() -> list[DeviceInfo]:
+    default_bcast = discovery.guess_broadcast_address()
+    broadcast = input(f"Broadcast address [{default_bcast}]: ").strip() or default_bcast
+    print("Scanning...")
+    try:
+        results = discovery.broadcast_info(broadcast, DEFAULT_PORT, DEFAULT_TIMEOUT)
+    except OSError as e:
+        print(f"Broadcast failed: {e}")
+        return []
+    results.sort(key=lambda info: info.serial)
+    print_scan_results(results)
+    return results
+
+
+INFO_CONTROL_MENU = {
+    "1": ("Info", action_info),
+    "2": ("Identify (blink)", action_identify),
+    "3": ("On", action_on),
+    "4": ("Off", action_off),
+    "5": ("Dim", action_dim),
+}
+ADMINISTRATION_MENU = {
+    "1": ("Reboot", action_reboot),
+    "2": ("Factory reset", action_reset),
+    "3": ("Change admin secret", action_change_secret),
+}
+
+
+def run_submenu(title: str, items: dict, ip: str, serial: str, store: SecretStore) -> None:
+    while True:
+        print(f"\n  -- {title} --")
+        for key, (label, _) in items.items():
+            print(f"    {key}) {label}")
+        print("    0) Back")
+        choice = input("  > ").strip()
+        if choice in ("0", ""):
+            return
+        if choice not in items:
+            print("  Invalid choice.")
+            continue
+        _, handler = items[choice]
+        run_action(handler, ip, serial, store)
+
+
+def device_menu(serial: str, ip: str, store: SecretStore) -> None:
+    while True:
+        print(f"\n=== {serial}  ip={ip} ===")
+        print("  1) Info & control  (info / identify / on / off / dim)")
+        print("  2) Administration  (reboot / factory reset / change admin secret)")
+        print("  0) Back to device list")
+        choice = input("> ").strip()
+        if choice in ("0", ""):
+            return
+        if choice == "1":
+            run_submenu("Info & control", INFO_CONTROL_MENU, ip, serial, store)
+        elif choice == "2":
+            run_submenu("Administration", ADMINISTRATION_MENU, ip, serial, store)
+        else:
+            print("Invalid choice.")
+
+
+def main() -> None:
+    print("=== DriverPoE admin tool ===")
+    store = JsonFileSecretStore(DEFAULT_SECRETS_FILE)
+    last_scan: list[DeviceInfo] = []
+    while True:
+        print()
+        if last_scan:
+            print_scan_results(last_scan)
+        else:
+            print("(no scan yet)")
+        print("  [S] Scan the network")
+        print("  [M] Enter a device IP manually")
+        print("  [Q] Quit")
+        choice = input("> ").strip()
+        lowered = choice.lower()
+
+        if choice == "" or lowered == "q":
+            break
+        if lowered == "s":
+            last_scan = scan_devices()
+            continue
+        if lowered == "m":
+            ip = input("IP: ").strip()
+            if not ip:
+                continue
+            info = discovery.resolve_device_by_ip(ip)
+            if info is None:
+                print("No response from that IP.")
+                continue
+            device_menu(info.serial, ip, store)
+            continue
+
+        try:
+            idx = int(choice)
+        except ValueError:
+            print("Invalid choice.")
+            continue
+        if not last_scan or not (1 <= idx <= len(last_scan)):
+            print("Invalid choice.")
+            continue
+        info = last_scan[idx - 1]
+        device_menu(info.serial, info.source_ip, store)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nBye.")

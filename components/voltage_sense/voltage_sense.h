@@ -1,5 +1,5 @@
 /** @file voltage_sense.h
- * @brief Leitura de VBUS e da tensão do LED por ADC.
+ * @brief VBUS and LED forward-voltage sensing via ADC.
  */
 #pragma once
 
@@ -11,28 +11,30 @@
 extern "C" {
 #endif
 
-/** @brief Tensões medidas, em milivolts. */
+/** @brief Measured voltages, in millivolts. */
 typedef struct {
-    int vbus_mv;         /**< Tensão do barramento. */
-    int led_voltage_mv;  /**< Tensão direta do LED. */
+    int vbus_mv;         /**< Bus voltage. */
+    int led_voltage_mv;  /**< LED forward voltage. */
 } voltage_reading_t;
 
-/** @brief Configuração dos canais ADC e divisor resistivo. */
+/** @brief ADC channel and divider configuration. */
 typedef struct {
-    adc_channel_t vled_p_channel; /**< Canal LED+. */
-    adc_channel_t vled_n_channel; /**< Canal LED-. */
-    float divider_ratio;           /**< Fator de escala do divisor. */
+    adc_channel_t vled_p_channel; /**< LED+ channel. */
+    adc_channel_t vled_n_channel; /**< LED- channel. */
+    float divider_ratio;          /**< Resistive divider scale factor. */
 } voltage_sense_config_t;
 
-/** @brief Inicializa o ADC para medição de tensão.
- * @param config Canais e fator do divisor.
- * @return Nenhum.
+/**
+ * @brief Initializes the ADC for voltage sensing.
+ * @param config Channels and divider ratio.
+ * @return None.
  */
 void voltage_sense_init(const voltage_sense_config_t *config);
 
-/** @brief Lê as tensões do barramento e do LED.
- * @param out Destino da leitura.
- * @return ESP_OK em sucesso; erro do ADC caso contrário.
+/**
+ * @brief Reads the bus and LED voltages.
+ * @param out Destination for the reading.
+ * @return ESP_OK on success; the underlying ADC error otherwise.
  */
 esp_err_t voltage_sense_read(voltage_reading_t *out);
 

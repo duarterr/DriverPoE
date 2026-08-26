@@ -1,3 +1,6 @@
+/** @file voltage_sense.c
+ * @brief ADC-based VBUS/LED voltage sensing implementation.
+ */
 #include "voltage_sense.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
@@ -6,17 +9,21 @@
 
 static const char *TAG = "VOLT_SENSE";
 
-#define ADC_UNIT_USED     ADC_UNIT_1
-#define ADC_ATTEN_USED    ADC_ATTEN_DB_12   /* wide range, needed since VBUS comes from a high-voltage divider (PoE/AUX rail) */
-#define FALLBACK_FULL_SCALE_MV  2450        /* typical effective range at 12dB attenuation, used only if eFuse calibration isn't available */
+#define ADC_UNIT_USED           ADC_UNIT_1
+#define ADC_ATTEN_USED          ADC_ATTEN_DB_12
+#define FALLBACK_FULL_SCALE_MV  2450
 
-/* Board wiring, copied in from voltage_sense_init()'s config argument. */
 static voltage_sense_config_t s_config;
 
 static adc_oneshot_unit_handle_t s_adc_handle;
 static adc_cali_handle_t s_cali_handle;
 static bool s_calibrated = false;
 
+/**
+ * @brief Converts a raw ADC reading to millivolts.
+ * @param raw Raw ADC sample.
+ * @return Voltage in millivolts.
+ */
 static int raw_to_mv(int raw)
 {
     if (s_calibrated) {
@@ -29,8 +36,6 @@ static int raw_to_mv(int raw)
 
 void voltage_sense_init(const voltage_sense_config_t *config)
 {
-    /* Copied, not just pointer-retained -- config doesn't need to stay
-     * valid after this call returns (see voltage_sense.h). */
     s_config = *config;
 
     adc_oneshot_unit_init_cfg_t unit_cfg = {
@@ -49,7 +54,7 @@ void voltage_sense_init(const voltage_sense_config_t *config)
         .unit_id = ADC_UNIT_USED,
         .atten = ADC_ATTEN_USED,
         .bitwidth = ADC_BITWIDTH_DEFAULT,
-        .default_vref = 1100, /* only used if the eFuse has no factory-calibrated Vref */
+        .default_vref = 1100,
     };
     esp_err_t err = adc_cali_create_scheme_line_fitting(&cali_cfg, &s_cali_handle);
     if (err == ESP_OK) {

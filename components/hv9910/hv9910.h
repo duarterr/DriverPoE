@@ -1,5 +1,5 @@
 /** @file hv9910.h
- * @brief Controle do driver de LEDs HV9910.
+ * @brief HV9910 LED driver control.
  */
 #pragma once
 
@@ -11,70 +11,93 @@
 extern "C" {
 #endif
 
-/** @brief Configuração do driver HV9910. */
+/** @brief HV9910 driver configuration. */
 typedef struct {
-    gpio_num_t shutdown_pin; /**< GPIO de habilitação. */
-    gpio_num_t dimming_pin;  /**< GPIO PWM de dimerização. */
-    bool shutdown_active_high; /**< Polaridade de habilitação. */
-    bool dim_active_high; /**< Polaridade do PWM. */
-    uint32_t pwm_freq_hz; /**< Frequência do PWM. */
-    uint32_t max_ramp_ms; /**< Limite de rampa em ms. */
+    gpio_num_t shutdown_pin;   /**< Enable GPIO. */
+    gpio_num_t dimming_pin;    /**< Dimming PWM GPIO. */
+    bool shutdown_active_high; /**< Enable pin polarity. */
+    bool dim_active_high;      /**< PWM pin polarity. */
+    uint32_t pwm_freq_hz;      /**< PWM frequency. */
+    uint32_t max_ramp_ms;      /**< Ramp duration ceiling, in ms. */
 } hv9910_config_t;
 
-/** @brief Inicializa o driver no estado desligado.
- * @param config GPIOs, polaridades e limites.
- * @return Nenhum.
+/**
+ * @brief Initializes the driver in the disabled state.
+ * @param config GPIOs, polarities, and limits.
+ * @return None.
  */
 void hv9910_init(const hv9910_config_t *config);
 
-/** @brief Habilita o driver e restaura o último nível.
- * @param ramp_ms Duração da rampa em ms.
- * @param persist true para persistir o estado ligado.
- * @return Nenhum.
+/**
+ * @brief Enables the driver and restores the last brightness level.
+ * @param ramp_ms Ramp duration in ms.
+ * @param persist true to persist the enabled state.
+ * @return None.
  */
 void hv9910_enable(uint32_t ramp_ms, bool persist);
 
-/** @brief Desabilita o driver após reduzir o brilho.
- * @param ramp_ms Duração da rampa em ms.
- * @param persist true para persistir o estado desligado.
- * @return Nenhum.
+/**
+ * @brief Disables the driver after ramping the brightness down.
+ * @param ramp_ms Ramp duration in ms.
+ * @param persist true to persist the disabled state.
+ * @return None.
  */
 void hv9910_disable(uint32_t ramp_ms, bool persist);
 
-/** @brief Desabilita o driver imediatamente, com prioridade.
- * @return Nenhum.
+/**
+ * @brief Disables the driver immediately, with priority over queued commands.
+ * @return None.
  */
 void hv9910_emergency_disable(void);
 
-/** @brief Informa o último estado persistido.
- * @return true se o estado persistido é ligado.
+/**
+ * @brief Reports the last persisted enabled/disabled state.
+ * @return true if the persisted state is enabled.
  */
 bool hv9910_was_last_on(void);
 
-/** @brief Informa se o driver está habilitado.
- * @return true se o driver está ligado.
+/**
+ * @brief Reports whether the driver is currently enabled.
+ * @return true if the driver is on.
  */
 bool hv9910_is_enabled(void);
 
-/** @brief Define o brilho do LED.
- * @param percent Brilho de 0 a 100.
- * @param ramp_ms Duração da rampa em ms.
- * @return Nenhum.
+/**
+ * @brief Sets the LED brightness.
+ * @param percent Brightness, 0-100.
+ * @param ramp_ms Ramp duration in ms.
+ * @return None.
  */
 void hv9910_set_dim(uint8_t percent, uint32_t ramp_ms);
 
-/** @brief Executa a sequência de identificação visual.
- * @return Nenhum.
+/**
+ * @brief Runs the visual identify blink sequence.
+ * @return None.
  */
 void hv9910_identify(void);
 
-/** @brief Obtém o brilho atual solicitado.
- * @return Brilho de 0 a 100.
+/**
+ * @brief Persists the desired enabled/disabled intent without touching hardware.
+ * @param on Desired intent; does not change the current physical state.
+ * @return None.
+ */
+void hv9910_persist_intent(bool on);
+
+/**
+ * @brief Reports whether a ramp or identify blink is currently in progress.
+ * @return true if a deferred action is pending.
+ */
+bool hv9910_is_ramp_pending(void);
+
+/**
+ * @brief Gets the currently requested brightness.
+ * @return Brightness, 0-100.
  */
 uint8_t hv9910_get_dim_percent(void);
 
-/** @brief Obtém o último brilho não nulo persistido.
- * @return Brilho de 1 a 100.
+/**
+ * @brief Gets the last persisted non-zero brightness.
+ * @return Brightness, 1-100.
  */
 uint8_t hv9910_get_last_nonzero_percent(void);
 

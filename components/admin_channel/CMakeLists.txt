@@ -9,6 +9,8 @@ idf_component_register(SRCS
                             voltage_sense
                             esp_netif
                             esp_timer
+                            esp_hw_support
                             nvs_flash
                             mbedtls
-                            esp_app_format)
+                            esp_app_format
+                            app_update)

@@ -50,3 +50,4 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # (2026-08-20: briefly disabled to A/B-test against a slow/flaky boot --
 # same behavior with or without it, so this is back on. Not the cause.)
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
