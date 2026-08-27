@@ -73,12 +73,12 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 
-# Per-unit admin secrets. The current store (device_api.secrets.
-# EncryptedFileSecretStore) is AES-256-GCM-encrypted and lives OUTSIDE this
-# tree by default ($APPDATA/driverpoe/ or ~/.config/driverpoe/), but ignore
-# any vault file and the old plaintext JSON in case one is pointed here.
-*.vault
-tools/*.vault
+# Per-unit admin keys. Nothing is stored by the tools -- the operator
+# supplies a keys file (device_api.secrets.KeyfileSecretStore) each
+# session and it stays in RAM. Ignore any such file (and the old
+# plaintext JSON) in case one is kept in the tree.
+*.keys
+admin_keys*.txt
 tools/admin_secrets.json
 
 # User-specific configuration files

@@ -10,7 +10,7 @@ Typical use::
 
     from device_api import AdminClient, MemorySecretStore, connect, discovery
 
-    store = MemorySecretStore()  # or EncryptedFileSecretStore(path, passphrase)
+    store = MemorySecretStore()  # or KeyfileSecretStore.load_text(open("keys.txt").read())
     devices = discovery.broadcast_info(discovery.guess_broadcast_address())
     client, info, secret = connect(devices[0].source_ip, store)
     client.on(secret, info.serial)
@@ -43,15 +43,11 @@ from .protocol import (
 )
 from .secrets import (
     ADMIN_DEFAULT_SECRET,
-    EncryptedFileSecretStore,
+    KeyfileSecretStore,
+    KeysFileError,
     MemorySecretStore,
     SecretStore,
-    VaultError,
-    VaultFormatError,
-    VaultLocked,
-    VaultMissing,
-    bootstrap_store,
-    default_vault_path,
+    parse_keys_file,
 )
 
 __all__ = [
@@ -73,15 +69,11 @@ __all__ = [
     "pack_dmx_config",
     "parse_dmx_config",
     "ADMIN_DEFAULT_SECRET",
-    "EncryptedFileSecretStore",
+    "KeyfileSecretStore",
+    "KeysFileError",
     "MemorySecretStore",
     "SecretStore",
-    "VaultError",
-    "VaultFormatError",
-    "VaultLocked",
-    "VaultMissing",
-    "bootstrap_store",
-    "default_vault_path",
+    "parse_keys_file",
     "connect",
     "find_working_secret",
     "mac_from_serial",

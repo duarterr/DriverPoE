@@ -2,8 +2,9 @@
 
 Run from ``tools/``:
 
-    python audit_admin.py                 # scan the LAN, check every unit
-    python audit_admin.py 192.168.0.40    # check one unit
+    python audit_admin.py                       # scan the LAN
+    python audit_admin.py 192.168.0.40          # check one unit
+    python audit_admin.py --keys mykeys.txt     # try keys from a file too
 
 For each unit it reports:
   * reachable?                    (unauthenticated INFO)
@@ -11,19 +12,16 @@ For each unit it reports:
   * a wrong random secret works?  -> must always be NO (proves the
                                      firmware is enforcing the HMAC, not
                                      just answering everyone)
-  * vault secret present & works? (only if a vault exists / is unlocked)
+  * keys-file key works?          (only with --keys)
 
 Nothing here changes any device state -- it only does INFO + CHALLENGE.
 """
 from __future__ import annotations
 
-import getpass
-import os
 import sys
 
-from device_api import ADMIN_DEFAULT_SECRET, AdminClient, default_vault_path, discovery
+from device_api import ADMIN_DEFAULT_SECRET, AdminClient, KeyfileSecretStore, discovery
 from device_api.client import AuthError, DeviceTimeoutError
-from device_api.secrets import EncryptedFileSecretStore, VaultError
 
 GREEN, RED, YELLOW, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
 
@@ -39,21 +37,7 @@ def _challenge_ok(client: AdminClient, secret: bytes, serial: str) -> bool:
         return False
 
 
-def _open_vault():
-    path = default_vault_path()
-    if not path.exists():
-        return None
-    pw = os.environ.get("DRIVERPOE_VAULT_PASSPHRASE") or getpass.getpass(f"Vault passphrase [{path}] (Enter to skip): ")
-    if not pw:
-        return None
-    try:
-        return EncryptedFileSecretStore(path, pw)
-    except VaultError as e:
-        print(f"{YELLOW}vault: {e}{RESET}")
-        return None
-
-
-def audit(ip: str, vault) -> None:
+def audit(ip: str, keychain: KeyfileSecretStore | None) -> None:
     client = AdminClient(ip, timeout=2.0)
     try:
         info = client.info()
@@ -73,22 +57,29 @@ def audit(ip: str, vault) -> None:
 
     line = f"{info.serial} @ {ip}: {verdict}"
 
-    if vault is not None:
-        s = vault.get(info.serial)
-        if s is None:
-            line += f"  {DIM}(no secret in the vault for this unit){RESET}"
-        elif _challenge_ok(client, s, info.serial):
-            line += f"  {GREEN}vault secret works{RESET}"
+    if keychain is not None:
+        k = keychain.get(info.serial)
+        if k is None:
+            line += f"  {DIM}(no key in the file for this unit){RESET}"
+        elif _challenge_ok(client, k, info.serial):
+            line += f"  {GREEN}keys-file key works{RESET}"
         else:
-            line += f"  {RED}vault secret MISMATCH{RESET}"
+            line += f"  {RED}keys-file key MISMATCH{RESET}"
     print(line)
     client.close()
 
 
 def main() -> None:
-    vault = _open_vault()
-    if len(sys.argv) > 1:
-        ips = sys.argv[1:]
+    args = sys.argv[1:]
+    keychain = None
+    if "--keys" in args:
+        i = args.index("--keys")
+        keychain = KeyfileSecretStore()
+        keychain.load_text(open(args[i + 1], encoding="utf-8").read())
+        del args[i:i + 2]
+
+    if args:
+        ips = args
     else:
         print("Scanning the LAN...")
         found = discovery.broadcast_info(discovery.guess_broadcast_address())
@@ -96,7 +87,7 @@ def main() -> None:
         if not ips:
             raise SystemExit("No unit responded to the broadcast.")
     for ip in ips:
-        audit(ip, vault)
+        audit(ip, keychain)
 
 
 if __name__ == "__main__":

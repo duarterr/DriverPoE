@@ -1,36 +1,39 @@
 """DriverPoE local web UI -- FastAPI backend.
 
 Built entirely on top of the `device_api` package (../device_api/) -- no
-protocol/HMAC/AES-GCM logic of its own. Per-unit admin secrets live in an
-at-rest-encrypted vault (`device_api.secrets.EncryptedFileSecretStore`);
-the operator unlocks it once per process with a passphrase (POST
-/api/vault/unlock, or $DRIVERPOE_VAULT_PASSPHRASE at startup) that is
-never stored. Until then every device endpoint returns 423. With no vault
-file at all, this falls back to a RAM-only store where each unit's secret
-is typed per session. A secret is only ever returned to the browser once,
-right after a CHANGE_SECRET the operator requested.
+protocol/HMAC logic of its own. Nothing is stored: the operator uploads a
+plain-text keys file (POST /api/keys) each time they open the page, and
+it lives in RAM for the life of this process only. Format, one per line:
+
+    DriverPoE-A4CF12B93D08   b64c3218...        # by full serial
+    A4CF12B93D08             0011223344...      # or by MAC tail
+    all others               ffffffffffff...    # fallback for the rest
+
+The backend tries the matching key per unit and reports each card's auth
+status (key / factory-default / no key). A key is only ever returned to
+the browser once, right after a CHANGE_SECRET the operator requested.
 
 Run from inside tools/:
 
     pip install fastapi "uvicorn[standard]" cryptography
     python -m webui.app
 
-...or, equivalently, `uvicorn webui.app:app --reload` from inside tools/.
-Then open http://127.0.0.1:8000/ .
+...or `uvicorn webui.app:app --reload` from inside tools/. Then open
+http://127.0.0.1:8000/ .
 
-This is a LOCAL tool: it binds 127.0.0.1 and has no operator login beyond
-the vault passphrase -- while unlocked, anything that can reach this HTTP
-server can command any DriverPoE unit. Run it on the operator's own
+This is a LOCAL tool: it binds 127.0.0.1 and has no operator login --
+while a keys file is loaded, anything that can reach this HTTP server can
+command the units those keys unlock. Run it on the operator's own
 machine; don't expose the port.
 """
 from __future__ import annotations
 
 import socket
-import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -59,32 +62,15 @@ from device_api.protocol import (
     DmxConfig,
     ProtocolVersionMismatchError,
 )
-from device_api.secrets import (
-    EncryptedFileSecretStore,
-    SecretStore,
-    VaultError,
-    VaultLocked,
-    bootstrap_store,
-    default_vault_path,
-)
+from device_api.secrets import ADMIN_DEFAULT_SECRET, KeyfileSecretStore, KeysFileError
 
 app = FastAPI(title="DriverPoE", description="Local admin UI for DriverPoE luminaires")
 
-# Per-unit admin secrets live in an at-rest-encrypted vault (see
-# device_api.secrets.EncryptedFileSecretStore). The passphrase is never
-# stored -- the operator supplies it once via POST /api/unlock (or
-# $DRIVERPOE_VAULT_PASSPHRASE at startup). With no vault file at all this
-# falls back to a RAM-only store where each unit's secret is entered per
-# session. _vault_state is one of: "unlocked" | "locked" | "memory".
-_vault_state, _secret_store = bootstrap_store()
-_vault_lock = threading.Lock()
-
-
-def _require_store() -> SecretStore:
-    with _vault_lock:
-        if _secret_store is None:
-            raise HTTPException(423, "Secret vault is locked -- POST /api/unlock first.")
-        return _secret_store
+# Per-unit admin keys come from a plain-text keys file the operator
+# uploads (POST /api/keys) each time they open the page. It's held in RAM
+# only -- never written anywhere. A "*" / "any" / "all others" line in
+# that file is the fallback key tried for serials not listed explicitly.
+_keychain = KeyfileSecretStore()
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -191,15 +177,14 @@ def _resolve_secret(client: AdminClient, serial: str, secret_hex: str | None) ->
             raise HTTPException(400, f"secret must be {SECRET_LEN} bytes; got {len(secret)}")
         return secret
 
-    store = _require_store()
     try:
-        secret, _nonce = find_working_secret(client, serial, store, manual_secret_provider=manual_provider)
+        secret, _nonce = find_working_secret(client, serial, _keychain, manual_secret_provider=manual_provider)
     except AuthError:
         if manual_was_used and secret_hex:
             raise HTTPException(401, "The provided admin secret was rejected by the device")
         raise
     if manual_was_used and secret_hex:
-        store.set(serial, secret)
+        _keychain.set(serial, secret)   # session only -- nothing written
     return secret
 
 
@@ -224,8 +209,6 @@ def _error_response(e: Exception) -> JSONResponse:
         return JSONResponse(status_code=409, content={"error": "ota_transfer_failed", "message": str(e)})
     if isinstance(e, DriverPoEError):
         return JSONResponse(status_code=400, content={"error": "device_api_error", "message": str(e)})
-    if isinstance(e, HTTPException) and e.status_code == 423:
-        return JSONResponse(status_code=423, content={"error": "vault_locked", "message": e.detail})
     raise e
 
 
@@ -274,45 +257,42 @@ class DmxConfigRequest(BaseModel):
     secret_hex: str | None = None
 
 
-class UnlockRequest(BaseModel):
-    passphrase: str
-    create: bool = False   # create a new vault at the default path if none exists
-
-
 # ======================================================================= #
-# Secret vault
+# Keys file (RAM only, never written)
 # ======================================================================= #
-@app.get("/api/vault")
-def api_vault():
-    """State of the per-unit secret store. 'locked' means the operator
-    must POST /api/unlock before any device command will work."""
-    with _vault_lock:
-        state = "unlocked" if _secret_store is not None else _vault_state
-        count = None
-        if isinstance(_secret_store, EncryptedFileSecretStore):
-            count = len(_secret_store.serials())
-    return {"state": state, "path": str(default_vault_path()), "secret_count": count}
+@app.get("/api/keys")
+def api_keys():
+    return {"loaded": _keychain.loaded, **_keychain.stats()}
 
 
-@app.post("/api/vault/unlock")
-def api_vault_unlock(body: UnlockRequest):
-    """Derive the vault key from the passphrase and hold it in this
-    process for the rest of its life. The passphrase itself is never
-    stored. `create: true` initializes a new vault when none exists."""
-    global _secret_store, _vault_state
-    if not body.passphrase:
-        raise HTTPException(400, "passphrase must not be empty")
-    path = default_vault_path()
+@app.post("/api/keys")
+async def api_keys_load(file: UploadFile = File(...)):
+    """Load a keys file (see the module docstring for the format). Replaces
+    whatever was loaded before. Nothing is written to disk."""
+    raw = (await file.read()).decode("utf-8", errors="replace")
     try:
-        store = EncryptedFileSecretStore(path, body.passphrase, create=body.create and not path.exists())
-    except VaultLocked:
-        raise HTTPException(401, "Wrong vault passphrase.")
-    except VaultError as e:
-        raise HTTPException(400, f"Vault: {e}")
-    with _vault_lock:
-        _secret_store = store
-        _vault_state = "unlocked"
-    return {"state": "unlocked", "secret_count": len(store.serials()), "created": store.is_new}
+        _keychain.load_text(raw)
+    except KeysFileError as e:
+        raise HTTPException(400, str(e))
+    return {"loaded": True, **_keychain.stats()}
+
+
+@app.post("/api/keys/clear")
+def api_keys_clear():
+    _keychain.clear()
+    return {"loaded": False, **_keychain.stats()}
+
+
+def _probe_auth(ip: str, serial: str) -> str:
+    """'key' = a real per-unit/fallback key from the loaded file works;
+    'default' = only the compiled-in factory default works (unit is not
+    protected); 'none' = nothing we have unlocks it."""
+    try:
+        with AdminClient(ip, DEFAULT_PORT, 1.5) as client:
+            secret, _ = find_working_secret(client, serial, _keychain)
+        return "default" if secret == ADMIN_DEFAULT_SECRET else "key"
+    except (AuthError, DeviceTimeoutError, DriverPoEError):
+        return "none"
 
 
 # ======================================================================= #
@@ -372,7 +352,16 @@ def api_scan(broadcast: str | None = None, timeout: float = DEFAULT_TIMEOUT):
     except OSError as e:
         raise HTTPException(400, f"Broadcast to {bcast} failed: {e}")
     results.sort(key=lambda info: info.serial)
-    return {"broadcast": bcast, "devices": [_device_to_dict(info) for info in results]}
+
+    # Probe each unit's auth status in parallel (CHALLENGE only, no change).
+    auth: dict[str, str] = {}
+    if results:
+        with ThreadPoolExecutor(max_workers=min(16, len(results))) as pool:
+            for info, st in zip(results, pool.map(lambda i: _probe_auth(i.source_ip, i.serial), results)):
+                auth[info.serial] = st
+
+    devices = [{**_device_to_dict(info), "auth": auth.get(info.serial, "unknown")} for info in results]
+    return {"broadcast": bcast, "devices": devices, "keys": {"loaded": _keychain.loaded, **_keychain.stats()}}
 
 
 @app.get("/api/devices/{ip}/info")
@@ -382,7 +371,7 @@ def api_device_info(ip: str, port: int = DEFAULT_PORT, timeout: float = DEFAULT_
             info = client.info()
     except Exception as e:
         return _error_response(e)
-    return _device_to_dict(info)
+    return {**_device_to_dict(info), "auth": _probe_auth(ip, info.serial)}
 
 
 # ======================================================================= #
@@ -464,7 +453,7 @@ def api_factory_reset(ip: str, body: FactoryResetRequest, port: int = DEFAULT_PO
             secret = _resolve_secret(client, info.serial, body.secret_hex)
             result = client.factory_reset(secret, info.serial)
             if result.applied:
-                _require_store().delete(info.serial)  # device reverted its secret to the factory default too
+                _keychain.delete(info.serial)  # device reverted its secret to the factory default too
     except Exception as e:
         return _error_response(e)
     return _result_to_dict(result)
@@ -486,7 +475,7 @@ def api_change_secret(ip: str, body: ChangeSecretRequest, port: int = DEFAULT_PO
             secret = _resolve_secret(client, info.serial, body.secret_hex)
             result, applied_secret = client.change_secret(secret, info.serial, new_secret)
             if result.applied:
-                _require_store().set(info.serial, applied_secret)
+                _keychain.set(info.serial, applied_secret)  # session only
     except Exception as e:
         return _error_response(e)
     # The new secret is returned ONCE, directly to the operator who just

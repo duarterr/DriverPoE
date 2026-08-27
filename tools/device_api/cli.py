@@ -11,6 +11,7 @@ from __future__ import annotations
 import getpass
 import os
 import socket
+import sys
 
 from . import discovery
 from .client import (
@@ -31,14 +32,7 @@ from .protocol import (
     SECRET_LEN,
     DmxConfig,
 )
-from .secrets import (
-    EncryptedFileSecretStore,
-    MemorySecretStore,
-    SecretStore,
-    VaultError,
-    VaultLocked,
-    default_vault_path,
-)
+from .secrets import KeyfileSecretStore, KeysFileError, MemorySecretStore, SecretStore
 
 
 def _prompt_admin_secret(serial: str) -> bytes:
@@ -398,38 +392,25 @@ def device_menu(serial: str, ip: str, store: SecretStore) -> None:
 
 
 def _open_store() -> SecretStore:
-    """Open the encrypted secret vault (prompting for the passphrase), or
-    fall back to a RAM-only store where every unit's secret is entered per
-    session. $DRIVERPOE_VAULT points elsewhere; $DRIVERPOE_VAULT_PASSPHRASE
-    skips the prompt (less safe -- shell history / env inspection)."""
-    path = default_vault_path()
-    env_pw = os.environ.get("DRIVERPOE_VAULT_PASSPHRASE")
-
-    if path.exists():
-        pw = env_pw or getpass.getpass(f"Vault passphrase [{path}]: ")
-        try:
-            store = EncryptedFileSecretStore(path, pw)
-        except VaultLocked:
-            raise SystemExit("Wrong vault passphrase.")
-        except VaultError as e:
-            raise SystemExit(f"Vault: {e}")
-        print(f"Vault unlocked ({len(store.serials())} secret(s)).")
-        return store
-
-    print(f"No secret vault at {path}.")
-    choice = input("  [C] create one there   [Enter] RAM only (enter secrets per session): ").strip().lower()
-    if choice != "c":
+    """Load an admin keys file if one was given (first CLI arg, or
+    $DRIVERPOE_KEYS) -- held in RAM only, never written. Otherwise a bare
+    RAM store where each unit's secret is typed per session."""
+    path = None
+    if len(sys.argv) > 1:
+        path = sys.argv[1]
+    elif os.environ.get("DRIVERPOE_KEYS"):
+        path = os.environ["DRIVERPOE_KEYS"]
+    if not path:
         return MemorySecretStore()
-    pw = env_pw or getpass.getpass("New vault passphrase: ")
-    if not pw:
-        raise SystemExit("Empty passphrase -- aborted.")
-    if not env_pw and getpass.getpass("Confirm passphrase: ") != pw:
-        raise SystemExit("Passphrases don't match.")
     try:
-        store = EncryptedFileSecretStore(path, pw, create=True)
-    except VaultError as e:
-        raise SystemExit(f"Vault: {e}")
-    print(f"Vault created at {path}.")
+        text = open(path, encoding="utf-8").read()
+        store = KeyfileSecretStore()
+        store.load_text(text)
+    except (OSError, KeysFileError) as e:
+        raise SystemExit(f"keys file: {e}")
+    s = store.stats()
+    print(f"Loaded {s['count']} key(s) from {path}"
+          + (" + a fallback ('all others')" if s["has_fallback"] else "") + " -- held in memory only.")
     return store
 
 
