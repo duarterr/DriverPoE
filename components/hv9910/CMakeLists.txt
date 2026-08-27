@@ -4,5 +4,4 @@ idf_component_register(SRCS
                         REQUIRES
                             esp_driver_gpio
                         PRIV_REQUIRES
-                            esp_driver_ledc
-                            nvs_flash)
+                            esp_driver_ledc)

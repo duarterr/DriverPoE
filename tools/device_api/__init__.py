@@ -30,12 +30,15 @@ from .client import (
 from .models import CommandResult, DeviceInfo
 from .protocol import (
     AdminStatus,
+    DmxConfig,
     PacketType,
     ProtocolError,
     ProtocolVersionMismatchError,
     mac_from_serial,
     mac_from_str,
     mac_to_str,
+    pack_dmx_config,
+    parse_dmx_config,
     serial_from_mac,
 )
 from .secrets import ADMIN_DEFAULT_SECRET, JsonFileSecretStore, MemorySecretStore, SecretStore
@@ -52,9 +55,12 @@ __all__ = [
     "MissingDependencyError",
     "OtaTransferError",
     "AdminStatus",
+    "DmxConfig",
     "PacketType",
     "ProtocolError",
     "ProtocolVersionMismatchError",
+    "pack_dmx_config",
+    "parse_dmx_config",
     "ADMIN_DEFAULT_SECRET",
     "JsonFileSecretStore",
     "MemorySecretStore",

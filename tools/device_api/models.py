@@ -31,6 +31,14 @@ class DeviceInfo:
     ramp_pending: bool
     vbus_mv: int
     led_voltage_mv: int
+    # DMX layer status (from the INFO response's trailing status block).
+    dmx_layer_enabled: bool
+    dmx_active_source: str            # none | artnet | sacn | both
+    dmx_level: int                   # 0..100 currently applied by the DMX layer
+    dmx_fps: int
+    dmx_artnet_port_address: int
+    dmx_sacn_universe: int
+    dmx_last_src_ip: str
 
     @property
     def mac_str(self) -> str:

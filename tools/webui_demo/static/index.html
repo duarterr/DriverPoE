@@ -3,118 +3,136 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DriverPoE — Light Demo</title>
 <style>
-:root{--ink:#f6f7ff;--muted:#a9afc7;--line:#ffffff1c;--hot:#d6ff43;--violet:#8c63ff;--panel:#111526d9}*{box-sizing:border-box}body{margin:0;min-height:100vh;color:var(--ink);font:15px/1.4 Inter,ui-sans-serif,system-ui,sans-serif;background:#060814;overflow-x:hidden}body:before{content:"";position:fixed;inset:-30%;z-index:-2;background:radial-gradient(circle at 22% 20%,#6c3eda99,transparent 25%),radial-gradient(circle at 78% 30%,#1e7ce58c,transparent 25%),radial-gradient(circle at 50% 95%,#b6dd2560,transparent 30%);filter:blur(30px);animation:drift 12s ease-in-out infinite alternate}@keyframes drift{to{transform:scale(1.13) rotate(6deg)}}.shell{max-width:1180px;margin:auto;padding:28px 22px 48px}.status{padding:9px 13px;border:1px solid var(--line);border-radius:999px;color:var(--muted);background:#0d1021a8;white-space:nowrap}.stage{position:relative;min-height:272px;overflow:hidden;border:1px solid var(--line);border-radius:25px;background:linear-gradient(135deg,#171841e6,#0d193be6);box-shadow:0 24px 70px #0005;padding:25px;display:flex;align-items:end}.stage:after{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(105deg,transparent 0 11%,#fff1 11.3% 11.7%,transparent 12% 22%);opacity:.35}#rays{position:absolute;inset:0;width:100%;height:100%;opacity:.9}.stage-copy{position:relative;z-index:1;max-width:500px}.stage h2{font-size:clamp(26px,4vw,40px);line-height:1.04;letter-spacing:-.05em;margin:0 0 9px}.stage p{color:#d5d8e9;margin:0}.lamp-row{position:absolute;right:4%;bottom:22px;z-index:1;display:flex;gap:14px;align-items:end}.lamp{width:42px;height:42px;border-radius:50%;background:#e9ff8b;box-shadow:0 0 22px 9px #d6ff4399;animation:glow 1.4s ease-in-out infinite alternate}.lamp:nth-child(2){animation-delay:.3s}.lamp:nth-child(3){animation-delay:.6s}.lamp:nth-child(4){animation-delay:.9s}.lamp:nth-child(5){animation-delay:1.2s}@keyframes glow{to{transform:scale(.72);box-shadow:0 0 10px 3px #d6ff4355}}.grid{display:grid;grid-template-columns:1.08fr .92fr;gap:16px;margin-top:16px}.card{border:1px solid var(--line);background:var(--panel);backdrop-filter:blur(18px);border-radius:18px;padding:20px}.card h3{margin:0 0 5px;font-size:17px}.card-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:5px}.card-head h3{margin:0}.hint{margin:0 0 17px;color:var(--muted);font-size:13px}.controls{display:flex;gap:9px;flex-wrap:wrap}.btn{appearance:none;border:1px solid #ffffff28;border-radius:10px;color:var(--ink);background:#ffffff0c;padding:10px 14px;font:inherit;font-weight:650;cursor:pointer;transition:.18s}.btn:hover:not(:disabled){transform:translateY(-2px);border-color:#fff7;background:#ffffff1d}.btn.primary{color:#182000;background:var(--hot);border-color:var(--hot)}.btn.violet{background:var(--violet);border-color:var(--violet)}.btn.danger{color:#ffb6bd}.btn:disabled{opacity:.48;cursor:not-allowed}.range-row{display:flex;align-items:center;gap:15px;margin-top:17px}.range-row output{font-weight:750;min-width:36px;color:var(--hot)}input[type=range]{accent-color:var(--hot);width:100%}.network{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:13px}input[type=text]{flex:1;min-width:150px;background:#070a18;border:1px solid var(--line);border-radius:10px;padding:10px;color:var(--ink);font:inherit}.fixtures{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;max-height:280px;overflow:auto}.fixture{padding:11px;border:1px solid var(--line);border-radius:12px;background:#060916a1}.fixture-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}.fixture-index{font-size:11px;font-weight:750;color:var(--hot)}.fixture-move{display:flex;gap:3px}.mini-btn{appearance:none;border:1px solid #ffffff28;border-radius:6px;background:#ffffff0c;color:var(--ink);font:inherit;font-size:11px;padding:3px 7px;cursor:pointer;line-height:1.3}.mini-btn:hover:not(:disabled){background:#ffffff1d}.mini-btn:disabled{opacity:.3;cursor:not-allowed}.identify-btn{display:block;width:100%;margin-top:8px;text-align:center}.fixture strong{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fixture small{color:var(--muted)}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#ff6172;margin-right:5px}.dot.ok{background:var(--hot);box-shadow:0 0 7px var(--hot)}.effects{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}.effects .btn{text-align:left;padding:13px}.effects small{display:block;color:var(--muted);font-weight:400;margin-top:2px}.music{margin-top:16px}.music-top{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.meter{height:8px;background:#ffffff13;border-radius:99px;overflow:hidden;margin-top:13px}.meter i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--hot),#50cdff,#c971ff);box-shadow:0 0 16px #8c63ff;transition:width .05s linear}.bands{display:flex;align-items:flex-end;gap:6px;height:64px;margin-top:13px}.band-col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}.band{width:100%;min-height:3px;border-radius:5px 5px 2px 2px;transition:height .05s linear}.band-col b{margin-top:5px;font-size:12px;color:var(--ink)}.band-label{display:flex;gap:6px;margin-top:3px}.band-label span{flex:1;text-align:center;color:var(--muted);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.toast{position:fixed;right:20px;bottom:20px;max-width:380px;padding:12px 15px;border-radius:12px;background:#171b2f;box-shadow:0 12px 35px #0008;border:1px solid var(--line);opacity:0;transform:translateY(10px);pointer-events:none;transition:.2s}.toast.show{opacity:1;transform:none}.toast.error{border-color:#f36b76}.card.span2{grid-column:1/-1}.secret{margin-top:16px;display:flex;gap:8px;align-items:center}.secret label{color:var(--muted);font-size:12px;white-space:nowrap}.secret input{padding:8px 10px;font-size:12px}@media(max-width:760px){.grid{grid-template-columns:1fr}.stage{min-height:240px}.lamp-row{opacity:.55}.shell{padding:18px 14px}.effects{grid-template-columns:1fr}}
+:root{--ink:#f6f7ff;--muted:#a9afc7;--line:#ffffff1c;--hot:#d6ff43;--violet:#8c63ff;--panel:#111526d9}*{box-sizing:border-box}body{margin:0;min-height:100vh;color:var(--ink);font:15px/1.4 Inter,ui-sans-serif,system-ui,sans-serif;background:#060814;overflow-x:hidden}body:before{content:"";position:fixed;inset:-30%;z-index:-2;background:radial-gradient(circle at 22% 20%,#6c3eda99,transparent 25%),radial-gradient(circle at 78% 30%,#1e7ce58c,transparent 25%),radial-gradient(circle at 50% 95%,#b6dd2560,transparent 30%);filter:blur(30px);animation:drift 12s ease-in-out infinite alternate}@keyframes drift{to{transform:scale(1.13) rotate(6deg)}}.shell{max-width:1180px;margin:auto;padding:28px 22px 48px}.status{padding:9px 13px;border:1px solid var(--line);border-radius:999px;color:var(--muted);background:#0d1021a8;white-space:nowrap}.stage{position:relative;min-height:240px;overflow:hidden;border:1px solid var(--line);border-radius:25px;background:linear-gradient(135deg,#171841e6,#0d193be6);box-shadow:0 24px 70px #0005;padding:25px;display:flex;align-items:end}.stage:after{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(105deg,transparent 0 11%,#fff1 11.3% 11.7%,transparent 12% 22%);opacity:.35}#rays{position:absolute;inset:0;width:100%;height:100%;opacity:.9}.stage-copy{position:relative;z-index:1;max-width:520px}.stage h2{font-size:clamp(24px,3.6vw,36px);line-height:1.04;letter-spacing:-.05em;margin:0 0 9px}.stage p{color:#d5d8e9;margin:0}.stage code{background:#ffffff14;padding:1px 6px;border-radius:5px;font-size:.85em}.grid{display:grid;grid-template-columns:1.08fr .92fr;gap:16px;margin-top:16px}.card{border:1px solid var(--line);background:var(--panel);backdrop-filter:blur(18px);border-radius:18px;padding:20px}.card h3{margin:0 0 5px;font-size:17px}.card-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:5px}.card-head h3{margin:0}.hint{margin:0 0 15px;color:var(--muted);font-size:13px}.controls{display:flex;gap:9px;flex-wrap:wrap}.btn{appearance:none;border:1px solid #ffffff28;border-radius:10px;color:var(--ink);background:#ffffff0c;padding:10px 14px;font:inherit;font-weight:650;cursor:pointer;transition:.18s}.btn:hover:not(:disabled){transform:translateY(-2px);border-color:#fff7;background:#ffffff1d}.btn.primary{color:#182000;background:var(--hot);border-color:var(--hot)}.btn.violet{background:var(--violet);border-color:var(--violet)}.btn.danger{color:#ffb6bd}.btn:disabled{opacity:.48;cursor:not-allowed}.range-row{display:flex;align-items:center;gap:15px;margin-top:17px}.range-row output{font-weight:750;min-width:36px;color:var(--hot)}input[type=range]{accent-color:var(--hot);width:100%}.network{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:13px}input[type=text]{flex:1;min-width:150px;background:#070a18;border:1px solid var(--line);border-radius:10px;padding:10px;color:var(--ink);font:inherit}.fixtures{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;max-height:320px;overflow:auto}.fixture{padding:11px;border:1px solid var(--line);border-radius:12px;background:#060916a1}.fixture.off{opacity:.5}.fixture-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}.fixture-index{font-size:11px;font-weight:750;color:var(--hot)}.fixture-addr{font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums}.mini-btn{appearance:none;border:1px solid #ffffff28;border-radius:6px;background:#ffffff0c;color:var(--ink);font:inherit;font-size:11px;padding:3px 7px;cursor:pointer;line-height:1.3}.mini-btn:hover:not(:disabled){background:#ffffff1d}.mini-btn:disabled{opacity:.3;cursor:not-allowed}.identify-btn{display:block;width:100%;margin-top:8px;text-align:center}.fixture strong{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fixture small{color:var(--muted);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fixture .note{color:var(--warn,#ffbd5c);font-size:11px;margin-top:3px}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#ff6172;margin-right:5px}.dot.ok{background:var(--hot);box-shadow:0 0 7px var(--hot)}.level-bar{height:4px;border-radius:99px;background:#ffffff13;margin-top:6px;overflow:hidden}.level-bar i{display:block;height:100%;background:var(--hot);transition:width .1s}.effects{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}.effects .btn{text-align:left;padding:13px}.effects small{display:block;color:var(--muted);font-weight:400;margin-top:2px}.music{margin-top:16px}.music-top{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.meter{height:8px;background:#ffffff13;border-radius:99px;overflow:hidden;margin-top:13px}.meter i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--hot),#50cdff,#c971ff);box-shadow:0 0 16px #8c63ff;transition:width .05s linear}.bands{display:flex;align-items:flex-end;gap:6px;height:64px;margin-top:13px}.band-col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}.band{width:100%;min-height:3px;border-radius:5px 5px 2px 2px;transition:height .05s linear}.band-col b{margin-top:5px;font-size:12px;color:var(--ink)}.band-label{display:flex;gap:6px;margin-top:3px}.band-label span{flex:1;text-align:center;color:var(--muted);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.toast{position:fixed;right:20px;bottom:20px;max-width:380px;padding:12px 15px;border-radius:12px;background:#171b2f;box-shadow:0 12px 35px #0008;border:1px solid var(--line);opacity:0;transform:translateY(10px);pointer-events:none;transition:.2s}.toast.show{opacity:1;transform:none}.toast.error{border-color:#f36b76}.card.span2{grid-column:1/-1}.secret{margin-top:14px;display:flex;gap:8px;align-items:center}.secret label{color:var(--muted);font-size:12px;white-space:nowrap}.secret input{padding:8px 10px;font-size:12px}@media(max-width:760px){.grid{grid-template-columns:1fr}.stage{min-height:200px}.shell{padding:18px 14px}.effects{grid-template-columns:1fr}}
 </style></head>
-<body><div class="shell"><section class="stage"><canvas id="rays"></canvas><div class="stage-copy"><h2>DriverPoE / live demo</h2><p>Control the room as a single scene and show every fixture's response.</p></div><div class="lamp-row"><i class="lamp"></i><i class="lamp"></i><i class="lamp"></i><i class="lamp"></i><i class="lamp"></i></div></section><div class="grid">
-<section class="card span2"><div class="card-head"><h3>Network</h3><div class="status" id="status">Ready to scan</div></div><p class="hint">Use ◉ Identify to flash one fixture, and ▲▼ to set its order.</p><div class="network"><input id="broadcast" type="text" placeholder="automatic broadcast — or e.g. 192.168.1.255"><button class="btn violet" id="scan" onclick="scan()">Scan for luminaires</button></div><div class="fixtures" id="fixtures"><span class="hint">No luminaires discovered yet.</span></div></section>
-<section class="card"><h3>Whole stage</h3><p class="hint">The commands below go to every luminaire found.</p><div class="controls"><button class="btn primary" onclick="group('on')">Turn on all</button><button class="btn" onclick="group('off')">Turn off all</button><button class="btn" onclick="group('dim',100)">Max</button><button class="btn" onclick="group('dim',20)">Ambient</button></div><div class="range-row"><span>Brightness</span><input id="dimmer" type="range" min="0" max="100" value="65" oninput="level.textContent=this.value+'%'" onchange="group('dim',+this.value)"><output id="level">65%</output></div><div class="secret"><label for="secret">Admin secret (if needed)</label><input id="secret" type="text" maxlength="64" placeholder="64 hex characters"></div></section>
-<section class="card"><h3>Demo scenes</h3><p class="hint">Each scene loops continuously until you stop it.</p><div class="effects"><button class="btn" onclick="effect('wave')">〰 Wave<small>Brightness sweeps</small></button><button class="btn" onclick="effect('pulse')">⚡ Pulse<small>Synchronized beats</small></button><button class="btn" onclick="effect('identify')">◉ Point out<small>One lit at a time</small></button></div><div class="controls" style="margin-top:13px"><button class="btn danger" onclick="stopEffect()">Stop effect</button></div></section>
-<section class="card span2"><h3>React to sound</h3><p class="hint">Choose a local audio file.</p><div class="music"><div class="music-top"><input id="audioFile" type="file" accept="audio/*"><button class="btn primary" id="musicBtn" onclick="toggleMusic()">Listen and follow</button></div><div class="meter"><i id="meter"></i></div><div class="bands" id="bands"></div><div class="band-label" id="bandLabels"></div></div></section></div></div><div class="toast" id="toast"></div>
+<body><div class="shell"><section class="stage"><canvas id="rays"></canvas><div class="stage-copy"><h2>DriverPoE / live demo</h2><p>Drives fixtures over <b>Art-Net</b>. Commission each one in the admin UI first (universe + DMX address + personality); this page reads that patch and streams to them — no admin secret needed for the show itself.</p></div></section><div class="grid">
+<section class="card span2"><div class="card-head"><h3>Network</h3><div class="status" id="status">Ready to scan</div></div><p class="hint">Fixtures are ordered by DMX address — that's also the band order for the sound-reactive mode. ◉ blinks one fixture.</p><div class="network"><input id="broadcast" type="text" placeholder="automatic broadcast — or e.g. 192.168.1.255"><button class="btn violet" id="scan" onclick="scan()">Scan for luminaires</button></div><div class="secret"><label for="secret">Admin secret (only to read the DMX patch of unknown units)</label><input id="secret" type="text" maxlength="64" placeholder="64 hex characters"></div><div class="fixtures" id="fixtures" style="margin-top:13px"><span class="hint">No luminaires discovered yet.</span></div></section>
+<section class="card"><h3>Whole stage</h3><p class="hint">Sent to every commissioned fixture over Art-Net.</p><div class="controls"><button class="btn primary" onclick="group('on')">All up</button><button class="btn" onclick="group('off')">All down</button><button class="btn" onclick="group('dim',100)">Max</button><button class="btn" onclick="group('dim',20)">Ambient</button><button class="btn danger" onclick="blackout()">Blackout &amp; release</button></div><div class="range-row"><span>Brightness</span><input id="dimmer" type="range" min="0" max="100" value="65" oninput="level.textContent=this.value+'%'" onchange="group('dim',+this.value)"><output id="level">65%</output></div><p class="hint" style="margin:12px 0 0">“Blackout &amp; release” stops the Art-Net stream — after each fixture’s signal-loss timeout the admin channel takes back control.</p></section>
+<section class="card"><h3>Demo scenes</h3><p class="hint">Each scene loops until you stop it.</p><div class="effects"><button class="btn" onclick="effect('wave')">〰 Wave<small>Brightness sweeps</small></button><button class="btn" onclick="effect('pulse')">⚡ Pulse<small>Synchronized beats</small></button><button class="btn" onclick="effect('identify')">◉ Point out<small>One lit at a time</small></button></div><div class="controls" style="margin-top:13px"><button class="btn danger" onclick="stopEffect()">Stop scene</button></div></section>
+<section class="card span2"><h3>React to sound</h3><p class="hint">Pick a local audio file; each fixture follows its own frequency band.</p><div class="music"><div class="music-top"><input id="audioFile" type="file" accept="audio/*"><button class="btn primary" id="musicBtn" onclick="toggleMusic()">Listen and follow</button></div><div class="meter"><i id="meter"></i></div><div class="bands" id="bands"></div><div class="band-label" id="bandLabels"></div></div></section></div></div><div class="toast" id="toast"></div>
 <script>
-let devices=[],audio=null,musicAnalysis=null,musicTimer=null,lastSentSig='',musicBusy=false,lastSendAt=0,musicFailStreak=0,musicFailWarned=false;const $=id=>document.getElementById(id);const BAND_HUES=[210,250,285,320,355,25,45,70,150,190];
-// The on-screen bars/meter redraw fast (smooth, responsive UI) -- that part
-// costs nothing but a bit of CPU. The actual network send to the physical
-// fixtures is throttled separately, at ~11Hz: that's the part bounded by the
-// firmware's per-IP anti-flood limit (40 packets/s, 2 packets/command -- see
-// app.py's _ip_cache comment) and by how fast the devices can really keep up.
+let devices=[],audio=null,musicAnalysis=null,musicTimer=null,lastSentSig='',musicBusy=false,lastSendAt=0;
+const $=id=>document.getElementById(id);const BAND_HUES=[210,250,285,320,355,25,45,70,150,190];
+// Visuals redraw fast; the Art-Net stream is server-side and continuous, so
+// the browser only needs to push new target levels a few times a second.
 const VISUAL_INTERVAL_MS=50;
-const SEND_INTERVAL_MS=90;
-// The whole track is analyzed server-side (audio_reactive.py: mel filterbank
-// + per-band AGC + spectral-flux onset detection + attack/release envelope)
-// BEFORE playback starts, once -- not frame-by-frame in the browser. This
-// function just gets the raw PCM there and back; the mapping itself lives
-// entirely in Python now.
-const ANALYZE_SAMPLE_RATE=22050; // matches audio_reactive.py's own default/fmax assumptions, and keeps the upload small
-function downmixToMono(buffer){
-  const len=buffer.length,mono=new Float32Array(len),ch=buffer.numberOfChannels;
-  for(let c=0;c<ch;c++){const data=buffer.getChannelData(c);for(let i=0;i<len;i++)mono[i]+=data[i]/ch}
-  return mono;
+const SEND_INTERVAL_MS=70;
+const ANALYZE_SAMPLE_RATE=22050;
+
+function toast(m,e=false){const x=$('toast');x.textContent=m;x.className='toast show'+(e?' error':'');clearTimeout(window.tt);window.tt=setTimeout(()=>x.className='toast',3600)}
+async function postJson(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});const d=await r.json().catch(()=>({}));if(!r.ok){const err=new Error(d.message||d.detail||`HTTP ${r.status}`);err.status=r.status;err.data=d;throw err}return d}
+
+function controllable(){return devices.filter(d=>d.controllable)}
+
+async function scan(){
+  const btn=$('scan');btn.disabled=true;$('status').textContent='Scanning network…';
+  const secret=$('secret').value.trim();
+  try{
+    let body={broadcast:$('broadcast').value.trim()||null};
+    if(secret)body.secret_hex=secret;
+    const d=await postJson('/api/scan',body);
+    devices=d.devices||[];
+    render();
+    const n=devices.length,c=d.controllable||0,ns=d.need_secret||0;
+    $('status').textContent=`${n} found · ${c} on Art-Net`;
+    if(c){toast(`${c} fixture(s) ready to drive.`);}
+    else if(ns){toast(`${ns} fixture(s) need the admin secret to read their DMX patch — type it above and scan again.`,true);}
+    else if(n){toast('Found fixtures, but none are commissioned. Enable the DMX layer in the admin UI, then scan again.',true);}
+    else{toast('Nothing responded; check the broadcast address.',true);}
+  }catch(e){$('status').textContent='Scan failed';toast(e.message,true)}
+  finally{btn.disabled=false}
 }
-async function resampleTo(buffer,targetRate){
-  if(buffer.sampleRate===targetRate)return buffer;
-  const length=Math.max(1,Math.ceil(buffer.duration*targetRate));
-  const off=new OfflineAudioContext(buffer.numberOfChannels,length,targetRate);
-  const src=off.createBufferSource();src.buffer=buffer;src.connect(off.destination);src.start(0);
-  return await off.startRendering();
+
+function render(){
+  let bandN=0;
+  $('fixtures').innerHTML=devices.length?devices.map((d)=>{
+    const idx=d.controllable?`#${++bandN}`:'—';
+    return `
+    <div class="fixture ${d.controllable?'':'off'}">
+      <div class="fixture-top">
+        <span class="fixture-index">${idx}</span>
+        ${d.controllable?`<span class="fixture-addr">${d.port_address?`u${d.port_address} · `:''}DMX ${d.address}${d.channels===2?'–'+(d.address+1):''}</span>`:''}
+      </div>
+      <strong>${d.serial}</strong>
+      <small><i class="dot ${d.poe_ready?'ok':''}"></i>${d.ip}${d.controllable?` · ${d.channels===2?'16-bit':'8-bit'}`:''}</small>
+      ${d.controllable?`<div class="level-bar"><i style="width:${d.level||0}%"></i></div>`:`<div class="note">${d.note||'not on Art-Net'}</div>`}
+      <button class="btn mini-btn identify-btn" onclick="identifyOne('${d.ip}')" ${d.controllable?'':'disabled'}>◉ Identify</button>
+    </div>`;
+  }).join(''):'<span class="hint">No luminaires found.</span>';
+  const centers=(musicAnalysis&&musicAnalysis.center_hz)||[];
+  const c=controllable();
+  if($('bands').children.length){
+    $('bandLabels').innerHTML=c.map((d,i)=>`<span title="${d.ip}">${centers[i]!=null?`Fixture ${i+1} · ~${fmtHz(centers[i])}Hz`:`Fixture ${i+1}`}</span>`).join('');
+  }
 }
+
+async function identifyOne(ip){
+  try{await postJson('/api/identify',{ip});toast('Identify sent.')}catch(e){toast(e.message,true)}
+}
+
+async function group(a,p){
+  if(!controllable().length)return toast('No commissioned fixtures. Scan first.',true);
+  if(a==='dim'&&p!=null){$('dimmer').value=p;$('level').textContent=p+'%'}
+  else if(a==='off'){$('dimmer').value=0;$('level').textContent='0%'}
+  else if(a==='on'){$('dimmer').value=100;$('level').textContent='100%'}
+  try{await postJson('/api/group',{action:a,percent:p});pollState()}catch(e){toast(e.message,true)}
+}
+
+async function blackout(){try{await postJson('/api/blackout');$('status').textContent='Blackout — releasing to admin';toast('Stream stopped. Fixtures revert to admin control after their loss timeout.')}catch(e){toast(e.message,true)}}
+
+async function effect(n){
+  if(!controllable().length)return toast('No commissioned fixtures. Scan first.',true);
+  try{await postJson('/api/effects/start',{name:n});$('status').textContent='Scene running: '+n;toast('Scene started. “Stop scene” any time.')}catch(e){toast(e.message,true)}
+}
+async function stopEffect(){try{await postJson('/api/effects/stop');$('status').textContent='Scene stopped';toast('Stop requested.')}catch(e){toast(e.message,true)}}
+
+// Light polling to keep the per-fixture level bars live.
+async function pollState(){
+  try{const d=await fetch('/api/state').then(r=>r.json());
+    const byIp={};(d.devices||[]).forEach(x=>byIp[x.ip]=x);
+    devices.forEach(x=>{const u=byIp[x.ip];if(u)x.level=u.level});
+    devices.forEach((x,i)=>{const bar=$('fixtures').children[i]?.querySelector('.level-bar i');if(bar)bar.style.width=(x.level||0)+'%'});
+  }catch(e){}
+}
+setInterval(()=>{if(devices.length)pollState()},700);
+
+function fmtHz(hz){return hz>=1000?(hz/1000).toFixed(hz>=10000?0:1)+'k':Math.round(hz)+''}
+function downmixToMono(buffer){const len=buffer.length,mono=new Float32Array(len),ch=buffer.numberOfChannels;for(let c=0;c<ch;c++){const data=buffer.getChannelData(c);for(let i=0;i<len;i++)mono[i]+=data[i]/ch}return mono}
+async function resampleTo(buffer,targetRate){if(buffer.sampleRate===targetRate)return buffer;const length=Math.max(1,Math.ceil(buffer.duration*targetRate));const off=new OfflineAudioContext(buffer.numberOfChannels,length,targetRate);const src=off.createBufferSource();src.buffer=buffer;src.connect(off.destination);src.start(0);return await off.startRendering()}
 async function analyzeFile(file,nBands){
   const bytes=await file.arrayBuffer();
   const tmpCtx=new (window.AudioContext||window.webkitAudioContext)();
-  let decoded;
-  try{decoded=await tmpCtx.decodeAudioData(bytes)}finally{tmpCtx.close()}
+  let decoded;try{decoded=await tmpCtx.decodeAudioData(bytes)}finally{tmpCtx.close()}
   const resampled=await resampleTo(decoded,ANALYZE_SAMPLE_RATE);
   const mono=downmixToMono(resampled);
-  const r=await fetch(`/api/music/analyze?sr=${resampled.sampleRate}&n_bands=${nBands}`,
-    {method:'POST',headers:{'Content-Type':'application/octet-stream'},body:mono.buffer});
+  const r=await fetch(`/api/music/analyze?sr=${resampled.sampleRate}&n_bands=${nBands}`,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:mono.buffer});
   const d=await r.json().catch(()=>({}));
   if(!r.ok)throw Error(d.message||d.detail||`Analysis failed (HTTP ${r.status})`);
-  return d; // {frame_seconds, center_hz, levels}
+  return d;
 }
-function fmtHz(hz){return hz>=1000?(hz/1000).toFixed(hz>=10000?0:1)+'k':Math.round(hz)+''}
-function secretPayload(){const s=$('secret').value.trim();return s?{secret_hex:s}:{}}function toast(m,e=false){const x=$('toast');x.textContent=m;x.className='toast show'+(e?' error':'');clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>x.className='toast',3600)}function payload(x={}){const s=$('secret').value.trim();return {...x,ips:devices.map(d=>d.ip),...(s?{secret_hex:s}:{})}}async function request(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})}),d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.message||d.detail||`HTTP error ${r.status}`);return d}async function scan(){let b=$('scan');b.disabled=true;$('status').textContent='Scanning network…';try{let v=$('broadcast').value.trim(),r=await fetch('/api/scan'+(v?'?broadcast='+encodeURIComponent(v):'')),d=await r.json();if(!r.ok)throw Error(d.detail||'Scan failed');devices=d.devices||[];render();$('status').textContent=`${devices.length} luminaire${devices.length===1?'':'s'} on stage`;toast(devices.length?'Network ready for the scene.':'Nothing responded; check the broadcast address.')}catch(e){$('status').textContent='Scan failed';toast(e.message,true)}finally{b.disabled=false}}function render(){
-  // The card-local order of `devices` IS the band order used by the reactive
-  // mode (renderBands/followMusic just iterate `devices` in this same order),
-  // so the #N badge here doubles as "this is band N" -- moving a fixture with
-  // ▲▼ re-numbers it immediately, no separate ordering state to keep in sync.
-  $('fixtures').innerHTML=devices.length?devices.map((d,i)=>`<div class="fixture"><div class="fixture-top"><span class="fixture-index">#${i+1}</span><div class="fixture-move"><button class="mini-btn" onclick="moveFixture(${i},-1)" ${i===0?'disabled':''} title="Move earlier">▲</button><button class="mini-btn" onclick="moveFixture(${i},1)" ${i===devices.length-1?'disabled':''} title="Move later">▼</button></div></div><strong>${d.serial}</strong><small><i class="dot ${d.poe_ready?'ok':''}"></i>${d.ip} · ${d.dim_percent}%</small><button class="btn mini-btn identify-btn" onclick="identifyOne('${d.ip}')">◉ Identify</button></div>`).join(''):'<span class="hint">No luminaires found.</span>'}
-function moveFixture(i,dir){
-  const j=i+dir;
-  if(j<0||j>=devices.length)return;
-  [devices[i],devices[j]]=[devices[j],devices[i]];
-  render();
-}
-async function identifyOne(ip){
-  try{await request('/api/group',{ips:[ip],action:'identify',...secretPayload()});toast('Identify sent to '+ip+'.')}catch(e){toast(e.message,true)}
-}
-async function group(a,p){if(!devices.length)return toast('Scan for luminaires first.',true);
-  // Optimistic UI: the slider/label reflect the requested level right away
-  // instead of only ever moving when the user drags the slider themselves --
-  // clicking Max/Ambient used to leave them stuck at whatever they last showed.
-  if(a==='dim'&&p!=null){$('dimmer').value=p;$('level').textContent=p+'%'}
-  else if(a==='off'){$('dimmer').value=0;$('level').textContent='0%'}
-  try{$('status').textContent='Sending cue to the stage…';let d=await request('/api/group',payload({action:a,percent:p,ramp_ms:a==='dim'?350:500})),f=d.results.filter(x=>!x.ok);$('status').textContent=f.length?`${f.length} luminaire(s) did not respond`:'Cue sent to the whole network';toast(f.length?"Some units failed. If it's an authentication issue, enter the admin secret.":'Scene applied to the group.',!!f)}catch(e){toast(e.message,true)}}async function effect(n){if(!devices.length)return toast('Scan for luminaires first.',true);try{await request('/api/effects/start',payload({name:n}));$('status').textContent='Effect running';toast('Scene started. Use “Stop effect” any time.')}catch(e){toast(e.message,true)}}async function stopEffect(){try{await request('/api/effects/stop');$('status').textContent='Stopping effect';toast('Stop requested.')}catch(e){toast(e.message,true)}}function renderBands(n){
-  // Each column is one luminaire: the colored bar is the live value (its height
-  // AND the "%" text under it both update every tick) -- the label below the
-  // column just identifies which fixture that is, it never changes on its own,
-  // so don't mistake it for a reading. Hz labels come from the server's own
-  // mel filterbank (musicAnalysis.center_hz) -- not guessed client-side.
+function renderBands(n){
   $('bands').innerHTML=Array.from({length:n},(_,i)=>`<div class="band-col"><i class="band" id="band${i}" style="background:hsl(${BAND_HUES[i%BAND_HUES.length]} 90% 62%)"></i><b id="val${i}">0%</b></div>`).join('');
   const centers=(musicAnalysis&&musicAnalysis.center_hz)||[];
-  $('bandLabels').innerHTML=devices.map((d,i)=>{
-    const label=centers[i]!=null?`Fixture ${i+1} · ~${fmtHz(centers[i])}Hz`:`Fixture ${i+1}`;
-    return `<span title="${d.ip}">${label}</span>`;
-  }).join('');
+  $('bandLabels').innerHTML=controllable().map((d,i)=>`<span title="${d.ip}">${centers[i]!=null?`Fixture ${i+1} · ~${fmtHz(centers[i])}Hz`:`Fixture ${i+1}`}</span>`).join('');
 }
 async function toggleMusic(){
   if(musicTimer){stopMusic();return}
-  if(!devices.length)return toast('Scan for luminaires first.',true);
+  const c=controllable();
+  if(!c.length)return toast('No commissioned fixtures. Scan first.',true);
   const f=$('audioFile').files[0];
   if(!f)return toast('Choose a song first.',true);
-  const btn=$('musicBtn');
-  btn.disabled=true;btn.textContent='Analyzing…';
+  const btn=$('musicBtn');btn.disabled=true;btn.textContent='Analyzing…';
   try{
-    musicAnalysis=await analyzeFile(f,devices.length);
-    audio=new Audio(URL.createObjectURL(f));
-    audio.onended=stopMusic;
-    renderBands(devices.length);
+    musicAnalysis=await analyzeFile(f,c.length);
+    audio=new Audio(URL.createObjectURL(f));audio.onended=stopMusic;
+    renderBands(c.length);
     await audio.play();
-    lastSendAt=0;lastSentSig='';musicFailStreak=0;musicFailWarned=false;
-    // setInterval, not requestAnimationFrame: rAF is tied to painting and the
-    // browser fully stops calling it once the tab/window loses focus or is
-    // minimized, which is why switching windows used to kill the light show
-    // while server-side effects (which run in a Python thread, not the page)
-    // kept going. setInterval keeps firing in the background (browsers may
-    // throttle it, rarely below ~1/s) so the reactive mode survives a tab switch.
+    lastSendAt=0;lastSentSig='';
     musicTimer=setInterval(followMusic,VISUAL_INTERVAL_MS);
     btn.textContent='Stop music';
-    toast('Reactive mode started — each luminaire follows its own band from the analyzed track.');
-  }catch(e){
-    musicAnalysis=null;
-    btn.textContent='Listen and follow';
-    toast('Could not start reactive mode: '+e.message,true);
-  }finally{
-    btn.disabled=false;
-  }
+    toast('Reactive mode started.');
+  }catch(e){musicAnalysis=null;btn.textContent='Listen and follow';toast('Could not start: '+e.message,true)}
+  finally{btn.disabled=false}
 }
 function stopMusic(){
   if(musicTimer)clearInterval(musicTimer);musicTimer=null;
@@ -125,41 +143,23 @@ function stopMusic(){
 }
 function followMusic(){
   if(!audio||!musicAnalysis)return;
-  const n=devices.length;
-  if(n){
-    // The whole track's intensities were already computed server-side before
-    // playback started -- this just looks up the frame matching the audio's
-    // current playback position and applies it. No analysis happens here.
-    const{frame_seconds,levels}=musicAnalysis;
-    const idx=Math.min(levels.length-1,Math.max(0,Math.floor(audio.currentTime/frame_seconds)));
-    const frame=levels[idx]||[];
-    const items=[];
-    let sum=0;
-    for(let i=0;i<n;i++){
-      const pct=frame[i]||0;
-      const bar=$('band'+i);if(bar)bar.style.height=pct+'%';
-      const val=$('val'+i);if(val)val.textContent=pct+'%';
-      items.push({ip:devices[i].ip,percent:pct});
-      sum+=pct;
-    }
-    $('meter').style.width=Math.round(sum/n)+'%';
-    // Visuals redraw on every tick (~20/s); actual network sends are throttled
-    // further below, under the firmware's per-IP anti-flood limit (40 packets/s
-    // — see app.py's _ip_cache comment).
-    const now=performance.now(),sig=items.map(it=>it.percent).join(',');
-    if(!musicBusy&&sig!==lastSentSig&&(now-lastSendAt)>=SEND_INTERVAL_MS){
-      lastSentSig=sig;lastSendAt=now;musicBusy=true;
-      request('/api/spectrum',{items,ramp_ms:0,...secretPayload()}).then(d=>{
-        const failed=(d.results||[]).filter(r=>!r.ok).length;
-        if(failed>0){
-          musicFailStreak++;
-          if(musicFailStreak>=6&&!musicFailWarned){
-            musicFailWarned=true;
-            toast("Some luminaires aren't responding in reactive mode (auth issue or the firmware's command rate limit). Check the admin secret.",true);
-          }
-        }else{musicFailStreak=0;musicFailWarned=false}
-      }).catch(()=>{musicFailStreak++}).finally(()=>musicBusy=false);
-    }
+  const c=controllable();const n=c.length;if(!n)return;
+  const{frame_seconds,levels}=musicAnalysis;
+  const idx=Math.min(levels.length-1,Math.max(0,Math.floor(audio.currentTime/frame_seconds)));
+  const frame=levels[idx]||[];
+  const items=[];let sum=0;
+  for(let i=0;i<n;i++){
+    const pct=frame[i]||0;
+    const bar=$('band'+i);if(bar)bar.style.height=pct+'%';
+    const val=$('val'+i);if(val)val.textContent=pct+'%';
+    items.push({ip:c[i].ip,percent:pct});sum+=pct;
   }
-}function draw(){let c=$('rays'),x=c.getContext('2d'),w=c.width=c.clientWidth*devicePixelRatio,h=c.height=c.clientHeight*devicePixelRatio,t=performance.now()/1000;x.clearRect(0,0,w,h);for(let i=0;i<7;i++){let p=w*(.22+i*.1),g=x.createLinearGradient(p,0,p+w*.2,h);g.addColorStop(0,`hsla(${190+i*25},100%,70%,.28)`);g.addColorStop(1,'transparent');x.fillStyle=g;x.beginPath();x.moveTo(p,0);x.lineTo(p+w*.045,0);x.lineTo(p+w*(.28+Math.sin(t+i)*.03),h);x.lineTo(p-w*(.15+Math.cos(t+i)*.02),h);x.fill()}requestAnimationFrame(draw)}draw();
+  $('meter').style.width=Math.round(sum/n)+'%';
+  const now=performance.now(),sig=items.map(it=>it.percent).join(',');
+  if(!musicBusy&&sig!==lastSentSig&&(now-lastSendAt)>=SEND_INTERVAL_MS){
+    lastSentSig=sig;lastSendAt=now;musicBusy=true;
+    postJson('/api/spectrum',{items}).catch(()=>{}).finally(()=>musicBusy=false);
+  }
+}
+function draw(){let c=$('rays'),x=c.getContext('2d'),w=c.width=c.clientWidth*devicePixelRatio,h=c.height=c.clientHeight*devicePixelRatio,t=performance.now()/1000;x.clearRect(0,0,w,h);for(let i=0;i<7;i++){let p=w*(.22+i*.1),g=x.createLinearGradient(p,0,p+w*.2,h);g.addColorStop(0,`hsla(${190+i*25},100%,70%,.28)`);g.addColorStop(1,'transparent');x.fillStyle=g;x.beginPath();x.moveTo(p,0);x.lineTo(p+w*.045,0);x.lineTo(p+w*(.28+Math.sin(t+i)*.03),h);x.lineTo(p-w*(.15+Math.cos(t+i)*.02),h);x.fill()}requestAnimationFrame(draw)}draw();
 </script></body></html>

@@ -7,9 +7,11 @@ import struct
 import unittest
 
 from device_api.protocol import (
+    DMX_CFG_WIRE_SIZE,
     HEADER_SIZE,
     HMAC_LEN,
     AdminStatus,
+    DmxConfig,
     Packet,
     PacketType,
     ProtocolError,
@@ -17,6 +19,8 @@ from device_api.protocol import (
     mac_from_serial,
     mac_from_str,
     mac_to_str,
+    pack_dmx_config,
+    parse_dmx_config,
     parse_info_payload,
     serial_from_mac,
     status_byte,
@@ -192,6 +196,14 @@ class TestInfoPayload(unittest.TestCase):
             ramp_pending=0,
             vbus_mv=48000,
             led_voltage_mv=3300,
+            # DMX status block
+            dmx_layer_enabled=1,
+            dmx_active_source=3,       # both
+            dmx_level=55,
+            dmx_fps=42,
+            dmx_artnet_port_address=0x0102,
+            dmx_sacn_universe=7,
+            dmx_last_src_ip=(10, 0, 0, 5),
         )
         fields.update(overrides)
         buf = bytearray()
@@ -211,10 +223,18 @@ class TestInfoPayload(unittest.TestCase):
         buf.append(fields["ramp_pending"])
         buf += struct.pack(">I", fields["vbus_mv"])
         buf += struct.pack(">i", fields["led_voltage_mv"])
+        buf.append(fields["dmx_layer_enabled"])
+        buf.append(fields["dmx_active_source"])
+        buf.append(fields["dmx_level"])
+        buf.append(fields["dmx_fps"])
+        buf += struct.pack(">H", fields["dmx_artnet_port_address"])
+        buf += struct.pack(">H", fields["dmx_sacn_universe"])
+        buf += bytes(fields["dmx_last_src_ip"])
         return bytes(buf)
 
     def test_parses_all_fields(self):
         payload = self._build_payload()
+        self.assertEqual(len(payload), 60)
         parsed = parse_info_payload(payload)
         self.assertEqual(parsed["mac"], bytes.fromhex("A4CF12B93D08"))
         self.assertEqual(parsed["fw_version"], "1.2.3")
@@ -228,16 +248,61 @@ class TestInfoPayload(unittest.TestCase):
         self.assertEqual(parsed["dim_percent"], 80)
         self.assertEqual(parsed["vbus_mv"], 48000)
         self.assertEqual(parsed["led_voltage_mv"], 3300)
+        self.assertTrue(parsed["dmx_layer_enabled"])
+        self.assertEqual(parsed["dmx_active_source"], "both")
+        self.assertEqual(parsed["dmx_level"], 55)
+        self.assertEqual(parsed["dmx_fps"], 42)
+        self.assertEqual(parsed["dmx_artnet_port_address"], 0x0102)
+        self.assertEqual(parsed["dmx_sacn_universe"], 7)
+        self.assertEqual(parsed["dmx_last_src_ip"], "10.0.0.5")
 
     def test_wrong_size_rejected(self):
         with self.assertRaises(ProtocolError):
             parse_info_payload(b"\x00" * 10)
+        with self.assertRaises(ProtocolError):
+            parse_info_payload(b"\x00" * 48)   # the pre-DMX layout is no longer accepted
 
     def test_unknown_enums_fall_back_to_numeric_string(self):
         payload = self._build_payload(reset_reason=250, poe_source=99)
         parsed = parse_info_payload(payload)
         self.assertEqual(parsed["reset_reason"], "250")
         self.assertEqual(parsed["poe_source"], "99")
+
+
+class TestDmxConfig(unittest.TestCase):
+    def test_round_trip(self):
+        cfg = DmxConfig(
+            layer_enabled=True,
+            proto_mask=0x03,
+            artnet_port_address=DmxConfig.from_artnet_parts(net=2, subnet=1, universe=5),
+            sacn_universe=1234,
+            dmx_address=17,
+            personality=1,
+            merge_mode=1,
+            loss_behavior=2,
+            loss_level=40,
+            loss_timeout_ms=2500,
+            smoothing_ms=80,
+            allow_artaddress=False,
+        )
+        blob = pack_dmx_config(cfg)
+        self.assertEqual(len(blob), DMX_CFG_WIRE_SIZE)
+        self.assertEqual(parse_dmx_config(blob), cfg)
+
+    def test_artnet_parts_views(self):
+        cfg = DmxConfig(artnet_port_address=DmxConfig.from_artnet_parts(3, 4, 6))
+        self.assertEqual(cfg.artnet_net, 3)
+        self.assertEqual(cfg.artnet_subnet, 4)
+        self.assertEqual(cfg.artnet_universe, 6)
+
+    def test_defaults_pack(self):
+        blob = pack_dmx_config(DmxConfig())
+        self.assertEqual(blob[0], 1)  # layout version
+        self.assertEqual(parse_dmx_config(blob), DmxConfig())
+
+    def test_wrong_size_rejected(self):
+        with self.assertRaises(ProtocolError):
+            parse_dmx_config(b"\x01" * 10)
 
 
 if __name__ == "__main__":

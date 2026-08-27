@@ -21,7 +21,16 @@ from .client import (
     connect,
 )
 from .models import DeviceInfo
-from .protocol import DEFAULT_PORT, DEFAULT_RAMP_MS, DEFAULT_TIMEOUT, SECRET_LEN
+from .protocol import (
+    DEFAULT_PORT,
+    DEFAULT_RAMP_MS,
+    DEFAULT_TIMEOUT,
+    DMX_LOSS_NAMES,
+    DMX_MERGE_NAMES,
+    DMX_PERSONALITY_NAMES,
+    SECRET_LEN,
+    DmxConfig,
+)
 from .secrets import DEFAULT_SECRETS_FILE, JsonFileSecretStore, SecretStore
 
 
@@ -68,6 +77,12 @@ def print_info(info: DeviceInfo) -> None:
         print("Ramp/blink in progress.")
     print(f"VBUS:                 {info.vbus_mv}mV")
     print(f"LED voltage:          {info.led_voltage_mv}mV")
+    print(f"DMX layer:            {'enabled' if info.dmx_layer_enabled else 'disabled'}"
+          f"  (live source: {info.dmx_active_source}, {info.dmx_level}% @ {info.dmx_fps}fps)")
+    if info.dmx_layer_enabled:
+        print(f"  Art-Net port-addr:   0x{info.dmx_artnet_port_address:04x}   sACN universe: {info.dmx_sacn_universe}")
+        if info.dmx_last_src_ip not in ("", "0.0.0.0"):
+            print(f"  Last DMX source IP:  {info.dmx_last_src_ip}")
 
 
 def print_scan_results(results: list[DeviceInfo]) -> None:
@@ -206,6 +221,83 @@ def action_change_secret(ip: str, serial: str, store: SecretStore) -> None:
         print(f"Saved to {getattr(store, 'path', '(in-memory store)')} -- this tool will use it automatically from now on.")
 
 
+def _prompt_int(label: str, current: int, lo: int, hi: int) -> int:
+    raw = input(f"  {label} [{current}]: ").strip()
+    if not raw:
+        return current
+    try:
+        v = int(raw, 0)
+    except ValueError:
+        print("  Not a number -- keeping the current value.")
+        return current
+    return max(lo, min(hi, v))
+
+
+def _prompt_bool(label: str, current: bool) -> bool:
+    raw = input(f"  {label} [{'y' if current else 'n'}]: ").strip().lower()
+    if not raw:
+        return current
+    return raw in ("y", "yes", "1", "true")
+
+
+def _print_dmx_config(cfg: DmxConfig) -> None:
+    protos = []
+    if cfg.proto_mask & 0x01:
+        protos.append("Art-Net")
+    if cfg.proto_mask & 0x02:
+        protos.append("sACN")
+    print(f"  Layer enabled:       {cfg.layer_enabled}")
+    print(f"  Protocols:           {', '.join(protos) or 'none'}")
+    print(f"  Art-Net universe:    net {cfg.artnet_net} / sub {cfg.artnet_subnet} / uni {cfg.artnet_universe}"
+          f"  (port-address 0x{cfg.artnet_port_address:04x})")
+    print(f"  sACN universe:       {cfg.sacn_universe}")
+    print(f"  DMX start address:   {cfg.dmx_address}")
+    print(f"  Personality:         {DMX_PERSONALITY_NAMES.get(cfg.personality, cfg.personality)}")
+    print(f"  Merge mode:          {DMX_MERGE_NAMES.get(cfg.merge_mode, cfg.merge_mode)}")
+    print(f"  Signal-loss:         {DMX_LOSS_NAMES.get(cfg.loss_behavior, cfg.loss_behavior)}"
+          f" (level {cfg.loss_level}%, timeout {cfg.loss_timeout_ms}ms)")
+    print(f"  Inter-frame smooth:  {cfg.smoothing_ms}ms")
+    print(f"  Accept ArtAddress:   {cfg.allow_artaddress}")
+
+
+def action_dmx_show(ip: str, serial: str, store: SecretStore) -> None:
+    client, info, secret = _connect(ip, store)
+    with client:
+        print(f"\n{info.serial}: DMX layer configuration")
+        _print_dmx_config(client.get_dmx_config(secret, info.serial))
+
+
+def action_dmx_configure(ip: str, serial: str, store: SecretStore) -> None:
+    client, info, secret = _connect(ip, store)
+    with client:
+        cfg = client.get_dmx_config(secret, info.serial)
+        print(f"\n{info.serial}: edit each field (Enter keeps the current value).")
+        cfg.layer_enabled = _prompt_bool("Enable the DMX layer?", cfg.layer_enabled)
+        artnet = _prompt_bool("Receive Art-Net?", bool(cfg.proto_mask & 0x01))
+        sacn = _prompt_bool("Receive sACN?", bool(cfg.proto_mask & 0x02))
+        cfg.proto_mask = (0x01 if artnet else 0) | (0x02 if sacn else 0)
+        net = _prompt_int("Art-Net Net (0-127)", cfg.artnet_net, 0, 127)
+        sub = _prompt_int("Art-Net Sub-Net (0-15)", cfg.artnet_subnet, 0, 15)
+        uni = _prompt_int("Art-Net Universe (0-15)", cfg.artnet_universe, 0, 15)
+        cfg.artnet_port_address = DmxConfig.from_artnet_parts(net, sub, uni)
+        cfg.sacn_universe = _prompt_int("sACN universe (1-63999)", cfg.sacn_universe, 1, 63999)
+        cfg.dmx_address = _prompt_int("DMX start address (1-512)", cfg.dmx_address, 1, 512)
+        cfg.personality = _prompt_int("Personality (0=1ch 8-bit, 1=2ch 16-bit)", cfg.personality, 0, 1)
+        cfg.merge_mode = _prompt_int("Merge mode (0=HTP, 1=LTP)", cfg.merge_mode, 0, 1)
+        cfg.loss_behavior = _prompt_int("On signal loss (0=hold, 1=to-black, 2=to-level)", cfg.loss_behavior, 0, 2)
+        cfg.loss_level = _prompt_int("Loss level % (for to-level)", cfg.loss_level, 0, 100)
+        cfg.loss_timeout_ms = _prompt_int("Loss timeout ms", cfg.loss_timeout_ms, 500, 60000)
+        cfg.smoothing_ms = _prompt_int("Inter-frame smoothing ms", cfg.smoothing_ms, 0, 5000)
+        cfg.allow_artaddress = _prompt_bool("Accept ArtAddress from the network?", cfg.allow_artaddress)
+
+        result = client.set_dmx_config(secret, info.serial, cfg)
+        if not result.applied:
+            print(f"{info.serial}: DMX_SET_CONFIG refused ({result.status.name}).")
+            return
+        print(f"{info.serial}: DMX config saved. Device now reports:")
+        _print_dmx_config(client.get_dmx_config(secret, info.serial))
+
+
 def run_action(handler, ip: str, serial: str, store: SecretStore) -> None:
     """Runs one action_* handler against the selected device, keeping the
     menu alive across every error class the package defines (plus
@@ -256,6 +348,10 @@ ADMINISTRATION_MENU = {
     "2": ("Factory reset", action_reset),
     "3": ("Change admin secret", action_change_secret),
 }
+DMX_MENU = {
+    "1": ("Show DMX config", action_dmx_show),
+    "2": ("Configure DMX / Art-Net / sACN", action_dmx_configure),
+}
 
 
 def run_submenu(title: str, items: dict, ip: str, serial: str, store: SecretStore) -> None:
@@ -279,6 +375,7 @@ def device_menu(serial: str, ip: str, store: SecretStore) -> None:
         print(f"\n=== {serial}  ip={ip} ===")
         print("  1) Info & control  (info / identify / on / off / dim)")
         print("  2) Administration  (reboot / factory reset / change admin secret)")
+        print("  3) DMX / Art-Net / sACN  (show / configure)")
         print("  0) Back to device list")
         choice = input("> ").strip()
         if choice in ("0", ""):
@@ -287,6 +384,8 @@ def device_menu(serial: str, ip: str, store: SecretStore) -> None:
             run_submenu("Info & control", INFO_CONTROL_MENU, ip, serial, store)
         elif choice == "2":
             run_submenu("Administration", ADMINISTRATION_MENU, ip, serial, store)
+        elif choice == "3":
+            run_submenu("DMX / Art-Net / sACN", DMX_MENU, ip, serial, store)
         else:
             print("Invalid choice.")
 

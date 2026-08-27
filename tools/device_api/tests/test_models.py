@@ -28,6 +28,13 @@ def _info(**overrides) -> DeviceInfo:
         ramp_pending=False,
         vbus_mv=48000,
         led_voltage_mv=3300,
+        dmx_layer_enabled=False,
+        dmx_active_source="none",
+        dmx_level=0,
+        dmx_fps=0,
+        dmx_artnet_port_address=0,
+        dmx_sacn_universe=1,
+        dmx_last_src_ip="0.0.0.0",
     )
     fields.update(overrides)
     return DeviceInfo(**fields)

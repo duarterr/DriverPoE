@@ -51,3 +51,9 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # same behavior with or without it, so this is back on. Not the cause.)
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
+# IGMP: the DMX layer's sACN (E1.31) receiver joins a multicast group
+# (239.255.<hi>.<lo>) per universe. This is the ESP-IDF default, pinned
+# explicitly so a future defconfig change can't silently break sACN
+# multicast reception (unicast sACN and all of Art-Net would still work).
+CONFIG_LWIP_IGMP=y
+
