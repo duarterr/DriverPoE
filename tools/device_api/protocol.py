@@ -27,12 +27,9 @@ MAC_LEN = 6
 # components/admin_channel/admin_protocol.h exactly.
 # --------------------------------------------------------------------- #
 MAGIC = 0x44504F45  # "DPOE"
-# 4: adds OTA (PacketType.OTA_*) over this same channel -- see
-# admin_protocol.h's own version comment. Nothing about the pre-existing
-# commands changed; the version bump is because ADMIN_MAX_PAYLOAD grew
-# (to fit one OTA chunk) and a v3 client wouldn't understand the new
-# packet types anyway.
-PROTO_VERSION = 4
+# Must match ADMIN_PROTO_VERSION in admin_protocol.h. A response with any
+# other version is rejected (ProtocolVersionMismatchError).
+PROTO_VERSION = 5
 SERIAL_LEN = 24
 NONCE_LEN = 16
 HMAC_LEN = 32
@@ -52,7 +49,21 @@ OTA_SHA256_LEN = 32
 
 ZERO_NONCE = b"\x00" * NONCE_LEN
 
-INFO_RESP_PAYLOAD_SIZE = 48  # see parse_info_payload() below
+INFO_RESP_PAYLOAD_SIZE = 60       # 48-byte core block + 12-byte DMX status block
+
+# DMX layer config wire format -- must match DMX_CFG_WIRE_SIZE /
+# dmx_config_pack() in components/dmx_input/include/dmx_input.h. 18 bytes:
+# 1 layout-version byte + 17 payload bytes, multi-byte fields big-endian.
+DMX_CFG_WIRE_SIZE = 18
+DMX_CFG_LAYOUT_VERSION = 1
+
+DMX_PROTO_ARTNET = 0x01
+DMX_PROTO_SACN = 0x02
+
+DMX_PERSONALITY_NAMES = {0: "1ch-8bit", 1: "2ch-16bit"}
+DMX_MERGE_NAMES = {0: "HTP", 1: "LTP"}
+DMX_LOSS_NAMES = {0: "hold", 1: "to-black", 2: "to-level"}
+DMX_SOURCE_NAMES = {0: "none", 1: "artnet", 2: "sacn", 3: "both"}
 
 
 class PacketType(IntEnum):
@@ -82,6 +93,10 @@ class PacketType(IntEnum):
     OTA_END_RESP = 0x8C
     OTA_ABORT = 0x0D
     OTA_ABORT_RESP = 0x8D
+    DMX_GET_CONFIG = 0x0E
+    DMX_GET_CONFIG_RESP = 0x8E
+    DMX_SET_CONFIG = 0x0F
+    DMX_SET_CONFIG_RESP = 0x8F
     ERR_RESP = 0xFF
 
 
@@ -230,10 +245,11 @@ _RESET_REASON_NAMES = {
 
 def parse_info_payload(payload: bytes) -> dict:
     """Returns a plain dict of the fields, in wire order -- models.py's
-    DeviceInfo.from_wire() adds the serial (from the packet header) and
-    source_ip (from the socket) that aren't part of this payload itself."""
+    DeviceInfo adds the serial (from the packet header) and source_ip
+    (from the socket) that aren't part of this payload itself."""
     if len(payload) != INFO_RESP_PAYLOAD_SIZE:
-        raise ProtocolError(f"unexpected INFO_RESP payload size: {len(payload)} (expected {INFO_RESP_PAYLOAD_SIZE})")
+        raise ProtocolError(
+            f"unexpected INFO_RESP payload size: {len(payload)} (expected {INFO_RESP_PAYLOAD_SIZE})")
     mac = payload[0:6]
     fw_version = payload[6:22].split(b"\x00", 1)[0].decode("ascii", errors="replace")
     ip = ".".join(str(b) for b in payload[22:26])
@@ -250,7 +266,7 @@ def parse_info_payload(payload: bytes) -> dict:
     ramp_pending = bool(payload[39])
     vbus_mv = struct.unpack(">I", payload[40:44])[0]
     led_voltage_mv = struct.unpack(">i", payload[44:48])[0]
-    return {
+    out = {
         "mac": mac,
         "fw_version": fw_version,
         "ip": ip,
@@ -268,3 +284,98 @@ def parse_info_payload(payload: bytes) -> dict:
         "vbus_mv": vbus_mv,
         "led_voltage_mv": led_voltage_mv,
     }
+
+    # DMX layer status block (payload[48:60]).
+    b = payload[48:60]
+    out.update({
+        "dmx_layer_enabled": bool(b[0]),
+        "dmx_active_source": DMX_SOURCE_NAMES.get(b[1], str(b[1])),
+        "dmx_level": b[2],
+        "dmx_fps": b[3],
+        "dmx_artnet_port_address": struct.unpack(">H", b[4:6])[0],
+        "dmx_sacn_universe": struct.unpack(">H", b[6:8])[0],
+        "dmx_last_src_ip": ".".join(str(x) for x in b[8:12]),
+    })
+    return out
+
+
+# ======================================================================= #
+# DMX layer config -- must match dmx_config_pack()/dmx_config_unpack() in
+# components/dmx_input/dmx_input.c exactly (DMX_CFG_WIRE_SIZE bytes,
+# big-endian, leading layout-version byte).
+# ======================================================================= #
+@dataclass
+class DmxConfig:
+    layer_enabled: bool = False
+    proto_mask: int = DMX_PROTO_ARTNET | DMX_PROTO_SACN
+    artnet_port_address: int = 0        # 15-bit (net<<8)|(subnet<<4)|universe
+    sacn_universe: int = 1             # 1..63999
+    dmx_address: int = 1              # 1..512
+    personality: int = 0             # 0 = 1ch 8-bit, 1 = 2ch 16-bit
+    merge_mode: int = 0             # 0 = HTP, 1 = LTP
+    loss_behavior: int = 0         # 0 = hold, 1 = to-black, 2 = to-level
+    loss_level: int = 0           # 0..100, used by to-level
+    loss_timeout_ms: int = 3000
+    smoothing_ms: int = 25
+    allow_artaddress: bool = True
+
+    # Convenience views on the packed Art-Net port address.
+    @property
+    def artnet_net(self) -> int:
+        return (self.artnet_port_address >> 8) & 0x7F
+
+    @property
+    def artnet_subnet(self) -> int:
+        return (self.artnet_port_address >> 4) & 0x0F
+
+    @property
+    def artnet_universe(self) -> int:
+        return self.artnet_port_address & 0x0F
+
+    @staticmethod
+    def from_artnet_parts(net: int, subnet: int, universe: int) -> int:
+        """Packs net/subnet/universe into a 15-bit port address."""
+        return ((net & 0x7F) << 8) | ((subnet & 0x0F) << 4) | (universe & 0x0F)
+
+
+def pack_dmx_config(cfg: DmxConfig) -> bytes:
+    return struct.pack(
+        ">BBBHHHBBBBHHB",
+        DMX_CFG_LAYOUT_VERSION,
+        1 if cfg.layer_enabled else 0,
+        cfg.proto_mask & 0xFF,
+        cfg.artnet_port_address & 0x7FFF,
+        cfg.sacn_universe & 0xFFFF,
+        cfg.dmx_address & 0xFFFF,
+        cfg.personality & 0xFF,
+        cfg.merge_mode & 0xFF,
+        cfg.loss_behavior & 0xFF,
+        cfg.loss_level & 0xFF,
+        cfg.loss_timeout_ms & 0xFFFF,
+        cfg.smoothing_ms & 0xFFFF,
+        1 if cfg.allow_artaddress else 0,
+    )
+
+
+def parse_dmx_config(payload: bytes) -> DmxConfig:
+    if len(payload) != DMX_CFG_WIRE_SIZE:
+        raise ProtocolError(
+            f"unexpected DMX config size: {len(payload)} (expected {DMX_CFG_WIRE_SIZE})")
+    (version, enabled, proto_mask, artnet_pa, sacn_u, addr, personality,
+     merge, loss_beh, loss_lvl, loss_to, smooth, allow_aa) = struct.unpack(">BBBHHHBBBBHHB", payload)
+    if version != DMX_CFG_LAYOUT_VERSION:
+        raise ProtocolError(f"unsupported DMX config layout version {version}")
+    return DmxConfig(
+        layer_enabled=bool(enabled),
+        proto_mask=proto_mask,
+        artnet_port_address=artnet_pa,
+        sacn_universe=sacn_u,
+        dmx_address=addr,
+        personality=personality,
+        merge_mode=merge,
+        loss_behavior=loss_beh,
+        loss_level=loss_lvl,
+        loss_timeout_ms=loss_to,
+        smoothing_ms=smooth,
+        allow_artaddress=bool(allow_aa),
+    )

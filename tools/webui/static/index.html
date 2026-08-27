@@ -33,11 +33,11 @@
     background: var(--panel); backdrop-filter: blur(18px);
   }
   .header-inner {
-    max-width: 1180px; margin: 0 auto; padding: 16px 20px;
+    max-width: 1360px; margin: 0 auto; padding: 16px 20px;
     display: flex; align-items: center; gap: 12px;
   }
   header h1 { font-size: 20px; letter-spacing: -.03em; margin: 0; flex: 1; }
-  .shell { max-width: 1180px; margin: 0 auto; padding: 20px 20px 48px; }
+  .shell { max-width: 1360px; margin: 0 auto; padding: 20px 20px 48px; }
   .field {
     padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
     background: #070a18; color: var(--fg); font: inherit; font-size: 13px; line-height: 18px;
@@ -51,7 +51,7 @@
   .btn-accent:hover:not(:disabled) { transform: translateY(-2px); }
   .btn-accent:disabled { opacity: .5; cursor: default; }
   .network-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-  main { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  main { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(272px, 1fr)); }
   .card.span2 { grid-column: 1 / -1; }
   .card {
     background: var(--card); border: 1px solid var(--border); border-radius: 18px;
@@ -76,14 +76,16 @@
     min-width: 92px; padding: 7px 12px; border: 1px solid #ffffff28; border-radius: 8px;
     background: #ffffff0c; color: var(--fg); cursor: pointer; font: inherit; font-weight: 650;
     font-size: 12px; text-align: center; transition: .18s;
+    display: inline-flex; align-items: center; justify-content: center;
   }
   .btn:hover:not(:disabled) { transform: translateY(-1px); border-color: #fff7; background: #ffffff1d; }
   .btn:disabled { opacity: .48; cursor: default; }
   .btn-danger { color: var(--danger); border-color: #ff617255; }
   .btn-fill { flex: 1; min-width: 0; } /* the 6 On/Off/Identify + Reboot/Factory reset/Change secret buttons -- each fills 1/3 of its row instead of the shared min-width */
   .controls { margin-top: 10px; }
-  .controls-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .controls-row { display: flex; align-items: stretch; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .controls-row:first-child { margin-top: 0; }
+  .controls-row.dim-row { align-items: center; } /* the slider row wants centered alignment, not stretched */
   .dim-wrap { position: relative; flex: 1; min-width: 100px; display: flex; align-items: center; }
   .dim-wrap input[type=range] { width: 100%; vertical-align: middle; accent-color: var(--hot); }
   .dim-tip { position: absolute; bottom: 100%; transform: translateX(-50%); margin-bottom: 4px; padding: 2px 6px; border-radius: 4px; background: var(--ink); color: #0b0d1a; font-size: 11px; font-weight: 700; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity .1s; }
@@ -100,6 +102,15 @@
   dialog::backdrop { background: #04050bb0; }
   dialog input[type=text] { width: 100%; padding: 8px 10px; margin: 8px 0 14px; border: 1px solid var(--border); border-radius: 8px; background: #070a18; color: var(--fg); font: inherit; }
   dialog .actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .dmx-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; max-width: 460px; }
+  .dmx-form .full { grid-column: 1 / -1; }
+  .dmx-form label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+  .dmx-form label.inline { flex-direction: row; align-items: center; gap: 6px; color: var(--fg); font-size: 13px; }
+  .dmx-form input[type=number], .dmx-form select {
+    padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px;
+    background: #070a18; color: var(--fg); font: inherit; font-size: 13px;
+  }
+  .dmx-form h4 { grid-column: 1 / -1; margin: 6px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--hot); }
   .card .info { margin: 8px 0 4px; }
   .section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em; color: var(--hot); margin: 0 0 6px; }
   .section-label-sub { margin-top: 10px; } /* a sub-heading within the same divider-bounded section (e.g. "Admin controls" under "Controls") -- some breathing room from the group above, no full divider needed */
@@ -198,8 +209,63 @@
     <div id="secretDialogMsg" style="margin-bottom:8px;color:var(--muted);font-size:13px;"></div>
     <input id="secretDialogInput" type="text" placeholder="64 hex characters" maxlength="64">
     <div class="actions">
-      <button type="button" onclick="document.getElementById('secretDialog').close()">Cancel</button>
-      <button type="button" id="secretDialogOk" style="background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;">Try</button>
+      <button type="button" class="btn" onclick="document.getElementById('secretDialog').close()">Cancel</button>
+      <button type="button" class="btn-accent" id="secretDialogOk">Try</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dmxDialog">
+  <form method="dialog" onsubmit="return false">
+    <h2 style="margin:0 0 4px;font-size:16px;" id="dmxDialogTitle">DMX settings</h2>
+    <div class="sub" style="color:var(--muted);font-size:12px;margin-bottom:10px;">
+      Commissioning for the Art-Net / sACN control layer. The device clamps out-of-range values.
+    </div>
+    <div class="dmx-form">
+      <label class="inline full"><input type="checkbox" id="dmx-layer_enabled"> Enable the DMX layer</label>
+
+      <h4>Protocols</h4>
+      <label class="inline"><input type="checkbox" id="dmx-proto-artnet"> Art-Net (UDP 6454)</label>
+      <label class="inline"><input type="checkbox" id="dmx-proto-sacn"> sACN / E1.31 (UDP 5568)</label>
+
+      <h4>Art-Net universe</h4>
+      <label>Net (0-127)<input type="number" id="dmx-artnet_net" min="0" max="127"></label>
+      <label>Sub-Net (0-15)<input type="number" id="dmx-artnet_subnet" min="0" max="15"></label>
+      <label>Universe (0-15)<input type="number" id="dmx-artnet_universe" min="0" max="15"></label>
+      <label>sACN universe (1-63999)<input type="number" id="dmx-sacn_universe" min="1" max="63999"></label>
+
+      <h4>Fixture</h4>
+      <label>DMX start address (1-512)<input type="number" id="dmx-dmx_address" min="1" max="512"></label>
+      <label>Personality
+        <select id="dmx-personality">
+          <option value="0">1 channel - intensity 8-bit</option>
+          <option value="1">2 channels - intensity 16-bit</option>
+        </select>
+      </label>
+      <label>Merge mode
+        <select id="dmx-merge_mode">
+          <option value="0">HTP (highest takes precedence)</option>
+          <option value="1">LTP (latest takes precedence)</option>
+        </select>
+      </label>
+      <label>Inter-frame smoothing (ms)<input type="number" id="dmx-smoothing_ms" min="0" max="5000"></label>
+
+      <h4>On signal loss</h4>
+      <label>Behavior
+        <select id="dmx-loss_behavior">
+          <option value="0">Hold last level</option>
+          <option value="1">Fade to black</option>
+          <option value="2">Fade to a set level</option>
+        </select>
+      </label>
+      <label>Set level % (for "fade to a set level")<input type="number" id="dmx-loss_level" min="0" max="100"></label>
+      <label>Timeout before "lost" (ms)<input type="number" id="dmx-loss_timeout_ms" min="500" max="60000"></label>
+      <label class="inline"><input type="checkbox" id="dmx-allow_artaddress"> Accept ArtAddress from the network</label>
+    </div>
+    <div id="dmxDialogMsg" style="margin-top:8px;font-size:12px;color:var(--muted);"></div>
+    <div class="actions" style="margin-top:12px;">
+      <button type="button" class="btn" onclick="document.getElementById('dmxDialog').close()">Cancel</button>
+      <button type="button" id="dmxDialogSave" class="btn-accent">Save to device</button>
     </div>
   </form>
 </dialog>
@@ -244,10 +310,69 @@ window.addEventListener('DOMContentLoaded', loadInterfaces);
 function pill(text, cls) { return `<span class="pill ${cls}">${text}</span>`; }
 function row(label, value) { return `<div class="row"><span class="label">${label}</span> <span>${value}</span></div>`; }
 
+function dmxSourcePill(src) {
+  if (src === 'artnet' || src === 'sacn') return pill(src, 'on');
+  if (src === 'both') return pill('art-net + sacn', 'on');
+  return pill('none', 'off');
+}
+function artnetParts(pa) {
+  return `net ${(pa >> 8) & 0x7f} / sub ${(pa >> 4) & 0x0f} / uni ${pa & 0x0f}`;
+}
+
+// Full DMX config per device (fetched lazily, authenticated). Keyed by
+// source_ip so it survives renderDevices() rebuilds. Value: the config
+// object, or the string 'unavailable' (needs a secret), or undefined
+// (not fetched yet).
+const dmxCfgCache = {};
+const DMX_PERSONALITY = { 0: '1 ch - intensity 8-bit', 1: '2 ch - intensity 16-bit' };
+const DMX_MERGE = { 0: 'HTP', 1: 'LTP' };
+const DMX_LOSS = { 0: 'hold last level', 1: 'fade to black', 2: 'fade to set level' };
+
+async function loadDmxCfg(ip) {
+  if (dmxCfgCache[ip] !== undefined) return;
+  dmxCfgCache[ip] = 'loading';
+  try {
+    const resp = await fetch(`/api/devices/${ip}/dmx`);
+    if (resp.ok) {
+      dmxCfgCache[ip] = await resp.json();
+    } else {
+      // 401 auth_needed, timeout, older firmware -- show a hint, don't nag.
+      dmxCfgCache[ip] = 'unavailable';
+    }
+  } catch (e) {
+    dmxCfgCache[ip] = 'unavailable';
+  }
+  renderDevices();
+}
+
+function dmxCfgRows(ip, d) {
+  const cfg = dmxCfgCache[ip];
+  if (cfg === undefined) { loadDmxCfg(ip); return row('Config', '<span class="label">loading…</span>'); }
+  if (cfg === 'loading') return row('Config', '<span class="label">loading…</span>');
+  if (cfg === 'unavailable') {
+    // Fall back to what INFO alone tells us.
+    return row('Art-Net port-address', `0x${(d.dmx_artnet_port_address ?? 0).toString(16).padStart(4,'0')} (${artnetParts(d.dmx_artnet_port_address ?? 0)})`)
+         + row('sACN universe', `${d.dmx_sacn_universe ?? 0}`)
+         + row('Config', '<span class="label">open "DMX settings" (secret needed)</span>');
+  }
+  const protos = [];
+  if (cfg.proto_mask & 1) protos.push('Art-Net');
+  if (cfg.proto_mask & 2) protos.push('sACN');
+  const loss = DMX_LOSS[cfg.loss_behavior] + (cfg.loss_behavior === 2 ? ` (${cfg.loss_level}%)` : '') + `, ${cfg.loss_timeout_ms}ms`;
+  return row('Protocols', protos.join(' + ') || '<span class="label">none</span>')
+       + row('Art-Net universe', `net ${cfg.artnet_net} / sub ${cfg.artnet_subnet} / uni ${cfg.artnet_universe} (0x${cfg.artnet_port_address.toString(16).padStart(4,'0')})`)
+       + row('sACN universe', `${cfg.sacn_universe}`)
+       + row('DMX start address', `${cfg.dmx_address}`)
+       + row('Personality', DMX_PERSONALITY[cfg.personality] ?? cfg.personality)
+       + row('Merge mode', DMX_MERGE[cfg.merge_mode] ?? cfg.merge_mode)
+       + row('Inter-frame smoothing', `${cfg.smoothing_ms}ms`)
+       + row('On signal loss', loss)
+       + row('Accept ArtAddress', cfg.allow_artaddress ? pill('yes', 'on') : pill('no', 'off'));
+}
+
 function renderDevices() {
   const el = document.getElementById('devices');
   if (!devices.length) {
-    el.innerHTML = '<div class="empty">No unit responded. Try Scan again, or check the broadcast address.</div>';
     updateBulkBar();
     return;
   }
@@ -311,6 +436,19 @@ function renderDevices() {
           <button class="btn btn-danger btn-fill" onclick="changeSecret(${i})">Change key</button>
         </div>
       </div>
+
+      <hr class="divider">
+
+      <div class="section-label">DMX / Art-Net / sACN</div>
+      <div class="info">
+        ${row('Layer', d.dmx_layer_enabled ? pill('enabled', 'on') : pill('disabled', 'off'))}
+        ${row('Live source', dmxSourcePill(d.dmx_active_source))}
+        ${row('DMX level', `${d.dmx_level ?? 0}%`)}
+        ${row('Frame rate', `${d.dmx_fps ?? 0}/s`)}
+        ${row('Last source IP', d.dmx_last_src_ip || '-')}
+        ${dmxCfgRows(d.source_ip, d)}
+      </div>
+      <div class="center-row"><button class="btn" onclick="openDmxDialog(${i})">DMX settings</button></div>
 
       <hr class="divider">
 
@@ -439,6 +577,7 @@ async function scanDevices() {
     const resp = await fetch(url);
     const data = await resp.json();
     devices = data.devices || [];
+    for (const k of Object.keys(dmxCfgCache)) delete dmxCfgCache[k];  // re-fetch config fresh each scan
     // indices are only meaningful within one scan's result set -- default
     // to "everything just found" selected, since bulk actions are the
     // common next step right after a scan.
@@ -577,6 +716,105 @@ async function doChangeSecret(i, newSecretHex) {
     return;
   }
 }
+
+// DMX layer -- reads the current config from the device (authenticated),
+// lets the operator edit it in a modal, then writes it back. Same
+// auth-retry pattern as cmd(): a 401 auth_needed prompts for a secret and
+// retries once. All protocol/HMAC work is server-side (device_api).
+let dmxDialogIndex = null;
+
+async function openDmxDialog(i) {
+  const d = devices[i];
+  dmxDialogIndex = i;
+  const dlg = document.getElementById('dmxDialog');
+  const msg = document.getElementById('dmxDialogMsg');
+  document.getElementById('dmxDialogTitle').textContent = `DMX settings -- ${d.serial}`;
+  msg.textContent = 'Loading current config from the device...';
+  dlg.showModal();
+
+  let secretHex = null;
+  let cfg = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const q = secretHex ? `?secret_hex=${encodeURIComponent(secretHex)}` : '';
+    const resp = await fetch(`/api/devices/${d.source_ip}/dmx${q}`);
+    const data = await resp.json().catch(() => ({}));
+    if (resp.ok) { cfg = data; dmxCfgCache[d.source_ip] = data; break; }
+    if (resp.status === 401 && data.error === 'auth_needed' && attempt === 0) {
+      secretHex = await promptForSecret(`No known admin secret works for ${d.serial}. Enter one to try:`);
+      if (!secretHex) { msg.textContent = 'Cancelled -- no secret provided.'; return; }
+      continue;
+    }
+    msg.textContent = data.message || `Failed to load DMX config (HTTP ${resp.status}).`;
+    return;
+  }
+  if (!cfg) return;
+
+  const set = (id, v) => { document.getElementById(id).value = v; };
+  const chk = (id, v) => { document.getElementById(id).checked = !!v; };
+  chk('dmx-layer_enabled', cfg.layer_enabled);
+  chk('dmx-proto-artnet', cfg.proto_mask & 0x01);
+  chk('dmx-proto-sacn', cfg.proto_mask & 0x02);
+  set('dmx-artnet_net', cfg.artnet_net);
+  set('dmx-artnet_subnet', cfg.artnet_subnet);
+  set('dmx-artnet_universe', cfg.artnet_universe);
+  set('dmx-sacn_universe', cfg.sacn_universe);
+  set('dmx-dmx_address', cfg.dmx_address);
+  set('dmx-personality', cfg.personality);
+  set('dmx-merge_mode', cfg.merge_mode);
+  set('dmx-smoothing_ms', cfg.smoothing_ms);
+  set('dmx-loss_behavior', cfg.loss_behavior);
+  set('dmx-loss_level', cfg.loss_level);
+  set('dmx-loss_timeout_ms', cfg.loss_timeout_ms);
+  chk('dmx-allow_artaddress', cfg.allow_artaddress);
+  msg.textContent = '';
+}
+
+document.getElementById('dmxDialogSave').addEventListener('click', async () => {
+  const i = dmxDialogIndex;
+  if (i === null) return;
+  const d = devices[i];
+  const msg = document.getElementById('dmxDialogMsg');
+  const num = (id) => parseInt(document.getElementById(id).value, 10) || 0;
+  const chk = (id) => document.getElementById(id).checked;
+  const base = {
+    layer_enabled: chk('dmx-layer_enabled'),
+    proto_mask: (chk('dmx-proto-artnet') ? 1 : 0) | (chk('dmx-proto-sacn') ? 2 : 0),
+    artnet_net: num('dmx-artnet_net'),
+    artnet_subnet: num('dmx-artnet_subnet'),
+    artnet_universe: num('dmx-artnet_universe'),
+    sacn_universe: num('dmx-sacn_universe'),
+    dmx_address: num('dmx-dmx_address'),
+    personality: num('dmx-personality'),
+    merge_mode: num('dmx-merge_mode'),
+    loss_behavior: num('dmx-loss_behavior'),
+    loss_level: num('dmx-loss_level'),
+    loss_timeout_ms: num('dmx-loss_timeout_ms'),
+    smoothing_ms: num('dmx-smoothing_ms'),
+    allow_artaddress: chk('dmx-allow_artaddress'),
+  };
+  if (base.proto_mask === 0) { msg.textContent = 'Pick at least one protocol.'; return; }
+
+  let secretHex = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const body = Object.assign({}, base, secretHex ? { secret_hex: secretHex } : {});
+    const { ok, status, data } = await postJson(`/api/devices/${d.source_ip}/dmx`, body);
+    if (ok) {
+      document.getElementById('dmxDialog').close();
+      if (data.config) dmxCfgCache[d.source_ip] = data.config;  // reflect the saved config on the card
+      await refreshOne(i);
+      if (data.applied) showMsg(i, 'DMX config saved.', true);
+      else showMsg(i, `DMX config refused (${data.status}).`, false);
+      return;
+    }
+    if (status === 401 && data.error === 'auth_needed' && attempt === 0) {
+      secretHex = await promptForSecret(`No known admin secret works for ${d.serial}. Enter one to try:`);
+      if (!secretHex) { msg.textContent = 'Cancelled -- no secret provided.'; return; }
+      continue;
+    }
+    msg.textContent = data.message || `Save failed (HTTP ${status}).`;
+    return;
+  }
+});
 
 // OTA -- pushes a .bin over an HTTP multipart upload to the backend,
 // which then relays it to the device over the admin UDP channel (see

@@ -15,15 +15,15 @@
 # it as "pending verify" -- IS implemented: see
 # confirm_app_if_pending_verify() in main/poe_luminaire_main.c.
 #
-# "nvs" holds two product-owned NVS namespaces: hv9910's brightness/on-off
-# memory, and the admin channel's secret (namespace "devid", key "secret"
-# -- see components/devid/devid.c). Both are "factory-resettable" state on
-# purpose -- FACTORY_RESET (admin_channel.c) erases this whole partition,
-# which is why it also reverts the admin secret to the compiled-in factory
-# default (devid_init() rewrites it automatically on the next boot, the
-# same way it does on a truly first boot) as well as forgetting the
-# remembered brightness/on-off state -- see README.md "Identidade do
-# dispositivo". The serial is NOT stored here (or anywhere) -- it's
+# "nvs" holds two product-owned NVS namespaces: the admin channel's secret
+# (namespace "devid", key "secret" -- see components/devid/devid.c) and the
+# DMX layer's config (namespace "dmx" -- see components/dmx_input/). Both
+# are "factory-resettable" state on purpose -- FACTORY_RESET
+# (admin_channel.c) erases this whole partition, which is why it reverts
+# the admin secret to the compiled-in factory default (devid_init()
+# rewrites it automatically on the next boot) and the DMX config to its
+# disabled default. hv9910 does NOT use NVS: the LED always boots off and
+# its level comes from the network. The serial is NOT stored here (or anywhere) -- it's
 # recomputed from the MAC at every boot, see devid.c. Sized at 0x14000
 # (kept from an earlier design that also budgeted room for a since-removed
 # Matter integration's fabric table here) -- comfortably larger than the

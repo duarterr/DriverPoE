@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 #define ADMIN_PROTO_MAGIC        0x44504F45u /**< "DPOE" identifier. */
-#define ADMIN_PROTO_VERSION      4           /**< Protocol version. */
+#define ADMIN_PROTO_VERSION      5           /**< Protocol version. Packets with any other version are dropped. */
 #define ADMIN_SERIAL_LEN         24          /**< Serial field, in bytes. */
 #define ADMIN_NONCE_LEN          16          /**< Nonce, in bytes. */
 #define ADMIN_HMAC_LEN           32          /**< HMAC-SHA256, in bytes. */
@@ -47,6 +47,13 @@ typedef enum {
     ADMIN_TYPE_OTA_END = 0x0C,        ADMIN_TYPE_OTA_END_RESP = 0x8C,
     /** Cancels an in-progress OTA session, if any (idempotent). HMAC + nonce. */
     ADMIN_TYPE_OTA_ABORT = 0x0D,      ADMIN_TYPE_OTA_ABORT_RESP = 0x8D,
+    /** Reads the DMX/Art-Net/sACN layer config. Response payload =
+     * DMX_CFG_WIRE_SIZE bytes (see components/dmx_input/include/dmx_input.h).
+     * HMAC + nonce. */
+    ADMIN_TYPE_DMX_GET_CONFIG = 0x0E, ADMIN_TYPE_DMX_GET_CONFIG_RESP = 0x8E,
+    /** Writes the DMX layer config. Request payload = DMX_CFG_WIRE_SIZE
+     * bytes; response payload = status(1). HMAC + nonce. */
+    ADMIN_TYPE_DMX_SET_CONFIG = 0x0F, ADMIN_TYPE_DMX_SET_CONFIG_RESP = 0x8F,
     ADMIN_TYPE_ERR_RESP = 0xFF,
 } admin_pkt_type_t;
 

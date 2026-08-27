@@ -3,19 +3,20 @@
  *
  * All hardware access and mutable state are owned exclusively by
  * hv9910_task; the public API functions only post commands to its queue.
+ *
+ * No NVS: every bit of state here is volatile. The luminaire always boots
+ * with the LED off. The on-level comes from the network (DMX or admin);
+ * a bare ON uses the last level commanded this boot, or 100% if none.
  */
 #include "hv9910.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "esp_attr.h"
 #include "esp_log.h"
-#include "nvs_flash.h"
-#include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include <inttypes.h>
-#include <string.h>
 
 static const char *TAG = "HV9910";
 
@@ -25,10 +26,7 @@ static const char *TAG = "HV9910";
 #define LEDC_DUTY_RES     LEDC_TIMER_10_BIT
 #define LEDC_DUTY_MAX     ((1 << 10) - 1)
 
-#define NVS_NAMESPACE             "hv9910"
-#define NVS_KEY_DIM               "dim"
-#define NVS_KEY_ON                "on"
-#define DEFAULT_RESTORE_PERCENT   100
+#define DEFAULT_ON_PERCENT   100  /**< Level for a bare ON when nothing has set one yet. */
 
 #define TASK_STACK_SIZE             3072
 #define TASK_PRIORITY               (tskIDLE_PRIORITY + 6)
@@ -54,19 +52,18 @@ static int shutdown_run_level(void)    { return s_config.shutdown_active_high ? 
 
 static volatile bool s_enabled = false;
 static volatile uint8_t s_dim_percent = 0;
-static volatile uint8_t s_last_nonzero_percent = 0;
-static volatile bool s_last_enabled_persisted = false;
+static volatile uint8_t s_last_nonzero_percent = 0;  /* 0 = no level set this boot */
+static volatile bool s_desired_on = false;           /* network's last on/off desire; survives a power blip */
 static bool s_ledc_started = false;
-static nvs_handle_t s_nvs_handle;
-static bool s_nvs_ok = false;
 
 /** @brief Command types accepted by hv9910_task. */
 typedef enum {
-    HV_CMD_ENABLE,
+    HV_CMD_ENABLE,            /**< Release SHUTDOWN, ramp to cmd.percent. */
     HV_CMD_DISABLE,
     HV_CMD_SET_DIM,
     HV_CMD_IDENTIFY,
-    HV_CMD_SET_INTENT,
+    HV_CMD_SET_PENDING,       /**< Record cmd.on as the desired state; no hardware change. */
+    HV_CMD_EMERGENCY_OFF,     /**< Assert SHUTDOWN now; leave s_desired_on untouched. */
     HV_CMD_FADE_TO_ZERO_DONE, /**< Internal only, posted by hv_fade_end_cb() -- never sent by post_cmd() callers. */
 } hv9910_cmd_type_t;
 
@@ -74,8 +71,8 @@ typedef enum {
 typedef struct {
     hv9910_cmd_type_t type; /**< Command type. */
     uint32_t ramp_ms;       /**< Ramp duration, for ENABLE/DISABLE/SET_DIM. */
-    bool persist;           /**< Persist flag for ENABLE/DISABLE/SET_DIM; desired value for SET_INTENT. */
-    uint8_t percent;        /**< Brightness, for SET_DIM. */
+    uint8_t percent;        /**< Brightness, for ENABLE/SET_DIM. */
+    bool on;                /**< Desired state, for SET_PENDING. */
 } hv9910_cmd_t;
 
 static QueueHandle_t s_cmd_queue;
@@ -98,6 +95,7 @@ static volatile bool s_awaiting_shutdown_fade = false;
 static int s_identify_steps_left;
 static bool s_identify_next_is_on;
 static bool s_identify_saved_enabled;
+static bool s_identify_saved_desired;
 static uint8_t s_identify_saved_dim;
 
 /**
@@ -123,101 +121,6 @@ static uint32_t clamp_ramp_ms(uint32_t ramp_ms)
         return s_config.max_ramp_ms;
     }
     return ramp_ms;
-}
-
-/**
- * @brief Initializes NVS and loads the persisted brightness/on-off state.
- * @return None.
- */
-static void nvs_init_and_load(void)
-{
-    esp_err_t err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        err = nvs_flash_init();
-    }
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "NVS init failed (%s) — brightness won't persist across reboots", esp_err_to_name(err));
-        return;
-    }
-
-    err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &s_nvs_handle);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "NVS open failed (%s) — brightness won't persist across reboots", esp_err_to_name(err));
-        return;
-    }
-    s_nvs_ok = true;
-
-    uint8_t saved = 0;
-    err = nvs_get_u8(s_nvs_handle, NVS_KEY_DIM, &saved);
-    if (err == ESP_OK && saved > 0 && saved <= 100) {
-        s_last_nonzero_percent = saved;
-        ESP_LOGI(TAG, "Restored last brightness from NVS: %u%%", saved);
-    } else {
-        s_last_nonzero_percent = DEFAULT_RESTORE_PERCENT;
-        if (err != ESP_ERR_NVS_NOT_FOUND) {
-            ESP_LOGW(TAG, "NVS read of '%s' failed (%s) — defaulting to %u%%",
-                     NVS_KEY_DIM, esp_err_to_name(err), DEFAULT_RESTORE_PERCENT);
-        }
-    }
-
-    uint8_t saved_on = 0;
-    err = nvs_get_u8(s_nvs_handle, NVS_KEY_ON, &saved_on);
-    if (err == ESP_OK) {
-        s_last_enabled_persisted = (saved_on != 0);
-        ESP_LOGI(TAG, "Restored last on/off state from NVS: %s", s_last_enabled_persisted ? "ON" : "off");
-    } else {
-        s_last_enabled_persisted = false;
-        if (err != ESP_ERR_NVS_NOT_FOUND) {
-            ESP_LOGW(TAG, "NVS read of '%s' failed (%s) — defaulting to off", NVS_KEY_ON, esp_err_to_name(err));
-        }
-    }
-}
-
-/**
- * @brief Persists a new non-zero brightness to NVS if it changed.
- * @param percent Brightness to persist.
- * @return None.
- */
-static void persist_last_nonzero(uint8_t percent)
-{
-    if (percent == 0 || percent == s_last_nonzero_percent) {
-        return;
-    }
-    s_last_nonzero_percent = percent;
-    if (!s_nvs_ok) {
-        return;
-    }
-    esp_err_t err = nvs_set_u8(s_nvs_handle, NVS_KEY_DIM, percent);
-    if (err == ESP_OK) {
-        err = nvs_commit(s_nvs_handle);
-    }
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to persist brightness to NVS (%s)", esp_err_to_name(err));
-    }
-}
-
-/**
- * @brief Persists the enabled/disabled state to NVS if it changed.
- * @param enabled New enabled/disabled state.
- * @return None.
- */
-static void persist_enabled_state(bool enabled)
-{
-    if (enabled == s_last_enabled_persisted) {
-        return;
-    }
-    s_last_enabled_persisted = enabled;
-    if (!s_nvs_ok) {
-        return;
-    }
-    esp_err_t err = nvs_set_u8(s_nvs_handle, NVS_KEY_ON, enabled ? 1 : 0);
-    if (err == ESP_OK) {
-        err = nvs_commit(s_nvs_handle);
-    }
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to persist on/off state to NVS (%s)", esp_err_to_name(err));
-    }
 }
 
 /**
@@ -281,17 +184,19 @@ static void ledc_start_if_needed(void)
  * @brief Sets the LEDC duty cycle, with an optional hardware fade.
  * @param percent Brightness, 0-100.
  * @param ramp_ms Ramp duration in ms; 0 for an instant change.
- * @param persist true to persist as the resume brightness (NVS write) if it
- * changed; false skips that write entirely -- for a transient/cosmetic dim
- * (effect frame, music-reactive update) that shouldn't touch flash at all.
+ * @param remember true to record a nonzero level as the volatile "last
+ * level" for a later bare enable; false for cosmetic changes (identify).
  * @return None.
  */
-static void hv_do_set_dim(uint8_t percent, uint32_t ramp_ms, bool persist)
+static void hv_do_set_dim(uint8_t percent, uint32_t ramp_ms, bool remember)
 {
     if (percent > 100) {
         percent = 100;
     }
     s_dim_percent = percent;
+    if (remember && percent > 0) {
+        s_last_nonzero_percent = percent;
+    }
 
     ledc_start_if_needed();
 
@@ -308,47 +213,33 @@ static void hv_do_set_dim(uint8_t percent, uint32_t ramp_ms, bool persist)
         ledc_fade_start(LEDC_SPEED_MODE, LEDC_CHANNEL, LEDC_FADE_NO_WAIT);
     }
 
-    if (persist) {
-        persist_last_nonzero(percent);
-    }
-
     ESP_LOGI(TAG, "Dimming set to %u%% over %ums (duty=%u/%u)", percent, (unsigned)ramp_ms, (unsigned)duty, LEDC_DUTY_MAX);
 }
 
 /**
- * @brief Enables the driver and ramps to the last remembered brightness.
+ * @brief Releases SHUTDOWN and ramps to an explicit brightness.
+ * @param percent Target brightness, 0-100.
  * @param ramp_ms Ramp duration in ms.
- * @param persist true to persist the enabled state.
  * @return None.
  */
-static void hv_do_enable(uint32_t ramp_ms, bool persist)
+static void hv_do_enable(uint8_t percent, uint32_t ramp_ms)
 {
-    if (persist) {
-        persist_enabled_state(true);
-    }
-
-    uint8_t restore_percent = (s_last_nonzero_percent > 0) ? s_last_nonzero_percent : DEFAULT_RESTORE_PERCENT;
-
+    s_desired_on = true;
     shutdown_write(shutdown_run_level());
     s_enabled = true;
-    hv_do_set_dim(restore_percent, ramp_ms, persist);
-    ESP_LOGW(TAG, "Driver ENABLED (SHUTDOWN released), ramping to %u%% over %ums%s",
-             restore_percent, (unsigned)ramp_ms, persist ? "" : " (transient, not persisted)");
+    hv_do_set_dim(percent, ramp_ms, true);
+    ESP_LOGW(TAG, "Driver ENABLED (SHUTDOWN released), ramping to %u%% over %ums", percent, (unsigned)ramp_ms);
 }
 
 /**
  * @brief Ramps the brightness to 0 and disables the driver.
  * @param ramp_ms Ramp duration in ms.
- * @param persist true to persist the disabled state.
  * @return None.
  */
-static void hv_do_disable(uint32_t ramp_ms, bool persist)
+static void hv_do_disable(uint32_t ramp_ms)
 {
-    if (persist) {
-        persist_enabled_state(false);
-    }
-
-    hv_do_set_dim(0, ramp_ms, persist);
+    s_desired_on = false;
+    hv_do_set_dim(0, ramp_ms, true);
 
     if (ramp_ms == 0) {
         shutdown_write(shutdown_assert_level());
@@ -365,11 +256,16 @@ static void hv_do_disable(uint32_t ramp_ms, bool persist)
 static void do_identify_step(void)
 {
     if (s_identify_steps_left <= 0) {
+        /* Restore exactly what we found -- identify must not disturb the
+         * on/off desire or the remembered level. */
         if (s_identify_saved_enabled) {
             hv_do_set_dim(s_identify_saved_dim, 0, false);
         } else {
-            hv_do_disable(0, false);
+            shutdown_write(shutdown_assert_level());
+            s_enabled = false;
+            hv_do_set_dim(0, 0, false);
         }
+        s_desired_on = s_identify_saved_desired;
         s_pending = PENDING_NONE;
         return;
     }
@@ -390,9 +286,13 @@ static void hv_do_identify(void)
 {
     s_identify_saved_enabled = s_enabled;
     s_identify_saved_dim = s_dim_percent;
+    s_identify_saved_desired = s_desired_on;
 
     if (!s_enabled) {
-        hv_do_enable(0, false);
+        // Light the driver just for the blink -- no change to the on/off
+        // desire or the remembered level.
+        shutdown_write(shutdown_run_level());
+        s_enabled = true;
     }
 
     s_identify_steps_left = IDENTIFY_BLINK_CYCLES * 2;
@@ -409,19 +309,31 @@ static void dispatch_cmd(const hv9910_cmd_t *cmd)
 {
     switch (cmd->type) {
     case HV_CMD_ENABLE:
-        hv_do_enable(cmd->ramp_ms, cmd->persist);
+        hv_do_enable(cmd->percent, cmd->ramp_ms);
         break;
     case HV_CMD_DISABLE:
-        hv_do_disable(cmd->ramp_ms, cmd->persist);
+        hv_do_disable(cmd->ramp_ms);
         break;
     case HV_CMD_SET_DIM:
-        hv_do_set_dim(cmd->percent, cmd->ramp_ms, cmd->persist);
+        hv_do_set_dim(cmd->percent, cmd->ramp_ms, true);
         break;
     case HV_CMD_IDENTIFY:
         hv_do_identify();
         break;
-    case HV_CMD_SET_INTENT:
-        persist_enabled_state(cmd->persist);
+    case HV_CMD_SET_PENDING:
+        s_desired_on = cmd->on;
+        break;
+    case HV_CMD_EMERGENCY_OFF:
+        // SHUTDOWN is the real cut; duty is irrelevant while it's asserted.
+        s_awaiting_shutdown_fade = false;
+        shutdown_write(shutdown_assert_level());
+        s_enabled = false;
+        s_dim_percent = 0;
+        if (s_ledc_started) {
+            ledc_set_duty(LEDC_SPEED_MODE, LEDC_CHANNEL, 0);
+            ledc_update_duty(LEDC_SPEED_MODE, LEDC_CHANNEL);
+        }
+        ESP_LOGW(TAG, "Driver EMERGENCY OFF (SHUTDOWN asserted; resumes on power if it was on)");
         break;
     case HV_CMD_FADE_TO_ZERO_DONE:
         // From hv_fade_end_cb(); s_enabled check is just idempotency.
@@ -533,12 +445,12 @@ void hv9910_init(const hv9910_config_t *config)
 
     s_enabled = false;
     s_dim_percent = 0;
+    s_last_nonzero_percent = 0;
+    s_desired_on = false;
     s_ledc_started = false;
 
-    nvs_init_and_load();
-
-    ESP_LOGI(TAG, "HV9910 initialized in safe mode: SHUTDOWN=%d (assert=%d), DIM=0%% (resume level: %u%%)",
-             shutdown_assert_level(), shutdown_assert_level(), s_last_nonzero_percent);
+    ESP_LOGI(TAG, "HV9910 initialized in safe mode: SHUTDOWN asserted (%d), DIM=0%%, LED off",
+             shutdown_assert_level());
 
     s_cmd_queue = xQueueCreate(CMD_QUEUE_LEN, sizeof(hv9910_cmd_t));
     if (s_cmd_queue == NULL) {
@@ -557,27 +469,36 @@ void hv9910_init(const hv9910_config_t *config)
     s_task_ready = true;
 }
 
-void hv9910_enable(uint32_t ramp_ms, bool persist)
+void hv9910_enable_at(uint8_t percent, uint32_t ramp_ms)
 {
-    hv9910_cmd_t cmd = { .type = HV_CMD_ENABLE, .ramp_ms = clamp_ramp_ms(ramp_ms), .persist = persist };
+    if (percent > 100) {
+        percent = 100;
+    }
+    hv9910_cmd_t cmd = { .type = HV_CMD_ENABLE, .ramp_ms = clamp_ramp_ms(ramp_ms), .percent = percent };
     post_cmd(&cmd, false);
 }
 
-void hv9910_disable(uint32_t ramp_ms, bool persist)
+void hv9910_enable(uint32_t ramp_ms)
 {
-    hv9910_cmd_t cmd = { .type = HV_CMD_DISABLE, .ramp_ms = clamp_ramp_ms(ramp_ms), .persist = persist };
+    uint8_t target = (s_last_nonzero_percent > 0) ? s_last_nonzero_percent : DEFAULT_ON_PERCENT;
+    hv9910_enable_at(target, ramp_ms);
+}
+
+void hv9910_disable(uint32_t ramp_ms)
+{
+    hv9910_cmd_t cmd = { .type = HV_CMD_DISABLE, .ramp_ms = clamp_ramp_ms(ramp_ms) };
     post_cmd(&cmd, false);
 }
 
 void hv9910_emergency_disable(void)
 {
-    hv9910_cmd_t cmd = { .type = HV_CMD_DISABLE, .ramp_ms = 0, .persist = false };
+    hv9910_cmd_t cmd = { .type = HV_CMD_EMERGENCY_OFF };
     post_cmd(&cmd, true);
 }
 
-void hv9910_set_dim(uint8_t percent, uint32_t ramp_ms, bool persist)
+void hv9910_set_dim(uint8_t percent, uint32_t ramp_ms)
 {
-    hv9910_cmd_t cmd = { .type = HV_CMD_SET_DIM, .ramp_ms = clamp_ramp_ms(ramp_ms), .persist = persist, .percent = percent };
+    hv9910_cmd_t cmd = { .type = HV_CMD_SET_DIM, .ramp_ms = clamp_ramp_ms(ramp_ms), .percent = percent };
     post_cmd(&cmd, false);
 }
 
@@ -587,9 +508,9 @@ void hv9910_identify(void)
     post_cmd(&cmd, false);
 }
 
-void hv9910_persist_intent(bool on)
+void hv9910_set_pending(bool on)
 {
-    hv9910_cmd_t cmd = { .type = HV_CMD_SET_INTENT, .persist = on };
+    hv9910_cmd_t cmd = { .type = HV_CMD_SET_PENDING, .on = on };
     post_cmd(&cmd, false);
 }
 
@@ -608,9 +529,9 @@ uint8_t hv9910_get_last_nonzero_percent(void)
     return s_last_nonzero_percent;
 }
 
-bool hv9910_was_last_on(void)
+bool hv9910_pending_on(void)
 {
-    return s_last_enabled_persisted;
+    return s_desired_on;
 }
 
 bool hv9910_is_enabled(void)

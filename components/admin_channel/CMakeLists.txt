@@ -7,6 +7,7 @@ idf_component_register(SRCS
                             hv9910
                             eth_init
                             voltage_sense
+                            dmx_input
                             esp_netif
                             esp_timer
                             esp_hw_support

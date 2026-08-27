@@ -24,9 +24,12 @@ from .protocol import (
     SECRET_LEN,
     ZERO_NONCE,
     AdminStatus,
+    DmxConfig,
     Packet,
     PacketType,
     ProtocolError,
+    pack_dmx_config,
+    parse_dmx_config,
     parse_info_payload,
     status_byte,
 )
@@ -168,19 +171,14 @@ class AdminClient:
         payload = ramp_ms.to_bytes(4, "big")
         return self._write_command("OFF", PacketType.OFF, PacketType.OFF_RESP, serial, key, nonce, payload)
 
-    def dim(self, key: bytes, serial: str, percent: int, ramp_ms: int = DEFAULT_RAMP_MS,
-            persist: bool = True) -> CommandResult:
-        """persist=False marks this as a transient/cosmetic dim (an effect frame,
-        a music-reactive update) -- the device skips writing it to NVS as the
-        resume brightness. Appends a 6th payload byte only for this case, so a
-        plain 5-byte payload (persist=True, the default) still matches what
-        older firmware expects."""
+    def dim(self, key: bytes, serial: str, percent: int, ramp_ms: int = DEFAULT_RAMP_MS) -> CommandResult:
+        """Sets the brightness (percent 0-100, ramp_ms). High-rate
+        brightness control belongs on the DMX layer, not a stream of DIM
+        commands (this one still costs a CHALLENGE round trip each)."""
         if not 0 <= percent <= 100:
             raise ValueError(f"percent must be 0-100, got {percent}")
         nonce = self.challenge(key, serial)
         payload = bytes([percent]) + ramp_ms.to_bytes(4, "big")
-        if not persist:
-            payload += bytes([0x01])
         return self._write_command("DIM", PacketType.DIM, PacketType.DIM_RESP, serial, key, nonce, payload)
 
     def identify(self, key: bytes, serial: str) -> CommandResult:
@@ -311,6 +309,26 @@ class AdminClient:
         (idempotent -- also succeeds if there wasn't one)."""
         nonce = self.challenge(key, serial)
         return self._write_command("OTA_ABORT", PacketType.OTA_ABORT, PacketType.OTA_ABORT_RESP, serial, key, nonce)
+
+    # -- DMX layer config ----------------------------------------------------
+    def get_dmx_config(self, key: bytes, serial: str) -> DmxConfig:
+        """Reads the Art-Net/sACN DMX layer configuration (authenticated)."""
+        nonce = self.challenge(key, serial)
+        pkt = Packet(type=PacketType.DMX_GET_CONFIG, serial=serial, nonce=nonce, payload=b"")
+        self._send(pkt, key)
+        resp = self._recv()
+        if resp.type != PacketType.DMX_GET_CONFIG_RESP or not resp.verify_hmac(key):
+            raise ProtocolError("invalid or unauthenticated response to DMX_GET_CONFIG")
+        return parse_dmx_config(resp.payload)
+
+    def set_dmx_config(self, key: bytes, serial: str, cfg: DmxConfig) -> CommandResult:
+        """Writes (and persists) the DMX layer configuration. The device
+        clamps out-of-range fields; a malformed payload comes back
+        ERR_BAD_ARG."""
+        nonce = self.challenge(key, serial)
+        return self._write_command("DMX_SET_CONFIG", PacketType.DMX_SET_CONFIG,
+                                    PacketType.DMX_SET_CONFIG_RESP, serial, key, nonce,
+                                    pack_dmx_config(cfg))
 
 
 def find_working_secret(client: AdminClient, serial: str, store: SecretStore,

@@ -8,6 +8,7 @@ idf_component_register(SRCS
                             eth_init
                             devid
                             admin_channel
+                            dmx_input
                             status_leds
                             esp_timer
                             app_update)

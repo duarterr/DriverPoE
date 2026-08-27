@@ -15,6 +15,7 @@
 #include "hv9910.h"
 #include "eth_init.h"
 #include "voltage_sense.h"
+#include "dmx_input.h"
 
 #include <string.h>
 #include <inttypes.h>
@@ -401,7 +402,7 @@ static void handle_info(int sock, const parsed_header_t *hdr, const struct socka
 
     vTaskDelay(pdMS_TO_TICKS(esp_random() % 50));
 
-    uint8_t payload[48];
+    uint8_t payload[64];
     size_t off = 0;
 
     memcpy(payload + off, devid_get_mac(), DEVID_MAC_LEN); off += DEVID_MAC_LEN;
@@ -426,7 +427,7 @@ static void handle_info(int sock, const parsed_header_t *hdr, const struct socka
     payload[off++] = tps2378_t2p_confirmed() ? 1 : 0;
     payload[off++] = tps2378_vbus_confirmed() ? 1 : 0;
     payload[off++] = hv9910_is_enabled() ? 1 : 0;
-    payload[off++] = hv9910_was_last_on() ? 1 : 0;
+    payload[off++] = hv9910_pending_on() ? 1 : 0;
     payload[off++] = hv9910_get_dim_percent();
     payload[off++] = hv9910_is_ramp_pending() ? 1 : 0;
     put_u32_be(payload + off, (uint32_t)tps2378_get_vbus_mv()); off += 4;
@@ -434,6 +435,19 @@ static void handle_info(int sock, const parsed_header_t *hdr, const struct socka
     voltage_reading_t v = {0};
     voltage_sense_read(&v);
     put_u32_be(payload + off, (uint32_t)v.led_voltage_mv); off += 4;
+
+    /* --- DMX layer status block: 12 bytes appended after the original 48.
+     * Length-additive on purpose (protocol version stays 4) -- a reader
+     * that only knows the 48-byte layout takes those and ignores the tail. --- */
+    dmx_input_status_t dmx = {0};
+    dmx_input_get_status(&dmx);
+    payload[off++] = dmx.layer_enabled ? 1 : 0;
+    payload[off++] = dmx.active_source;
+    payload[off++] = dmx.merged_level_pct;
+    payload[off++] = dmx.fps;
+    put_u16_be(payload + off, dmx.artnet_port_address); off += 2;
+    put_u16_be(payload + off, dmx.sacn_universe); off += 2;
+    put_u32_be(payload + off, dmx.last_src_ip); off += 4;
 
     send_packet(sock, src, ADMIN_TYPE_INFO_RESP, NULL, payload, (uint16_t)off, NULL);
 }
@@ -475,11 +489,11 @@ static void handle_on(int sock, const parsed_header_t *hdr,
     uint32_t ramp_ms = get_u32_be(payload);
 
     if (!tps2378_is_ready()) {
-        hv9910_persist_intent(true);
+        hv9910_set_pending(true);
         send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_ON_RESP, ADMIN_STATUS_ACCEPTED_PENDING, devid_get_admin_secret());
         return;
     }
-    hv9910_enable(ramp_ms, true);
+    hv9910_enable(ramp_ms);
     send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_ON_RESP, ADMIN_STATUS_OK, devid_get_admin_secret());
 }
 
@@ -501,7 +515,7 @@ static void handle_off(int sock, const parsed_header_t *hdr,
         return;
     }
     uint32_t ramp_ms = get_u32_be(payload);
-    hv9910_disable(ramp_ms, true);
+    hv9910_disable(ramp_ms);
     send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_OFF_RESP, ADMIN_STATUS_OK, devid_get_admin_secret());
 }
 
@@ -509,8 +523,8 @@ static void handle_off(int sock, const parsed_header_t *hdr,
  * @brief Handles DIM: sets brightness, or defers turning on if power isn't confirmed.
  * @param sock UDP socket.
  * @param hdr Parsed request header.
- * @param payload Request payload (percent, ramp_ms, optional transient flag byte).
- * @param payload_len Payload length: 5 (legacy) or 6 (with the flag byte).
+ * @param payload Request payload: percent (1) + ramp_ms (4, BE).
+ * @param payload_len Payload length (5).
  * @param src Source address.
  * @return None.
  */
@@ -518,39 +532,31 @@ static void handle_dim(int sock, const parsed_header_t *hdr,
                         const uint8_t *payload, uint16_t payload_len,
                         const struct sockaddr_in *src)
 {
-    if ((payload_len != 5 && payload_len != 6) || payload[0] > 100) {
+    if (payload_len != 5 || payload[0] > 100) {
         send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DIM_RESP, ADMIN_STATUS_ERR_BAD_ARG, devid_get_admin_secret());
         return;
     }
     uint8_t percent = payload[0];
     uint32_t ramp_ms = get_u32_be(payload + 1);
-    // Optional 6th byte, bit 0: "transient" -- skip persisting this as the
-    // resume brightness. Absent (5-byte legacy payload) means persist, same
-    // as always; a music-reactive or chase-effect caller sets it so a rapid
-    // stream of dims doesn't turn into a rapid stream of NVS writes (each one
-    // a blocking flash commit on the same task that drains the command
-    // queue -- enough of them in a row and the queue backs up, so brightness
-    // lags further and further behind what was actually requested).
-    bool transient = (payload_len == 6) && (payload[5] & 0x01);
-    bool persist = !transient;
 
     if (percent == 0) {
-        hv9910_disable(ramp_ms, persist);
+        hv9910_disable(ramp_ms);
         send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DIM_RESP, ADMIN_STATUS_OK, devid_get_admin_secret());
         return;
     }
 
     if (!tps2378_is_ready()) {
-        hv9910_persist_intent(true);
-        hv9910_set_dim(percent, ramp_ms, persist);
+        hv9910_set_pending(true);
+        hv9910_set_dim(percent, ramp_ms);   // remembers the level; SHUTDOWN stays asserted until power is confirmed
         send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DIM_RESP, ADMIN_STATUS_ACCEPTED_PENDING, devid_get_admin_secret());
         return;
     }
 
     if (!hv9910_is_enabled()) {
-        hv9910_enable(0, persist);
+        hv9910_enable_at(percent, ramp_ms);
+    } else {
+        hv9910_set_dim(percent, ramp_ms);
     }
-    hv9910_set_dim(percent, ramp_ms, persist);
     send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DIM_RESP, ADMIN_STATUS_OK, devid_get_admin_secret());
 }
 
@@ -890,6 +896,50 @@ static void handle_ota_abort(int sock, const parsed_header_t *hdr, const struct 
 }
 
 /**
+ * @brief Handles DMX_GET_CONFIG: returns the serialized DMX layer config.
+ * @param sock UDP socket.
+ * @param hdr Parsed request header.
+ * @param src Source address.
+ * @return None.
+ */
+static void handle_dmx_get_config(int sock, const parsed_header_t *hdr, const struct sockaddr_in *src)
+{
+    dmx_input_config_t cfg;
+    if (!dmx_input_get_config(&cfg)) {
+        send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DMX_GET_CONFIG_RESP, ADMIN_STATUS_ERR_INTERNAL, devid_get_admin_secret());
+        return;
+    }
+    uint8_t buf[DMX_CFG_WIRE_SIZE];
+    dmx_config_pack(&cfg, buf);
+    send_packet(sock, src, ADMIN_TYPE_DMX_GET_CONFIG_RESP, hdr->nonce, buf, sizeof(buf), devid_get_admin_secret());
+}
+
+/**
+ * @brief Handles DMX_SET_CONFIG: applies and persists a new DMX layer config.
+ * @param sock UDP socket.
+ * @param hdr Parsed request header.
+ * @param payload Serialized config (DMX_CFG_WIRE_SIZE bytes).
+ * @param payload_len Payload length.
+ * @param src Source address.
+ * @return None.
+ */
+static void handle_dmx_set_config(int sock, const parsed_header_t *hdr,
+                                   const uint8_t *payload, uint16_t payload_len,
+                                   const struct sockaddr_in *src)
+{
+    dmx_input_config_t cfg;
+    if (payload_len != DMX_CFG_WIRE_SIZE || !dmx_config_unpack(payload, payload_len, &cfg)) {
+        send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DMX_SET_CONFIG_RESP, ADMIN_STATUS_ERR_BAD_ARG, devid_get_admin_secret());
+        return;
+    }
+    if (!dmx_input_set_config(&cfg)) {
+        send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DMX_SET_CONFIG_RESP, ADMIN_STATUS_ERR_INTERNAL, devid_get_admin_secret());
+        return;
+    }
+    send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DMX_SET_CONFIG_RESP, ADMIN_STATUS_OK, devid_get_admin_secret());
+}
+
+/**
  * @brief Validates, authenticates, and dispatches one received packet.
  * @param sock UDP socket.
  * @param buf Raw packet buffer.
@@ -976,6 +1026,12 @@ static void handle_packet(int sock, uint8_t *buf, size_t len, const struct socka
         break;
     case ADMIN_TYPE_CHANGE_SECRET:
         handle_change_secret(sock, &hdr, payload, hdr.payload_len, src, buf, ADMIN_HEADER_WIRE_SIZE);
+        break;
+    case ADMIN_TYPE_DMX_GET_CONFIG:
+        handle_dmx_get_config(sock, &hdr, src);
+        break;
+    case ADMIN_TYPE_DMX_SET_CONFIG:
+        handle_dmx_set_config(sock, &hdr, payload, hdr.payload_len, src);
         break;
     default:
         send_status_resp(sock, src, hdr.nonce, ADMIN_TYPE_ERR_RESP, ADMIN_STATUS_ERR_BAD_ARG, devid_get_admin_secret());

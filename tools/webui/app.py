@@ -50,7 +50,14 @@ from device_api.client import (
     find_working_secret,
 )
 from device_api.models import CommandResult, DeviceInfo
-from device_api.protocol import DEFAULT_PORT, DEFAULT_RAMP_MS, DEFAULT_TIMEOUT, SECRET_LEN, ProtocolVersionMismatchError
+from device_api.protocol import (
+    DEFAULT_PORT,
+    DEFAULT_RAMP_MS,
+    DEFAULT_TIMEOUT,
+    SECRET_LEN,
+    DmxConfig,
+    ProtocolVersionMismatchError,
+)
 from device_api.secrets import DEFAULT_SECRETS_FILE, JsonFileSecretStore
 
 app = FastAPI(title="DriverPoE", description="Local admin UI for DriverPoE luminaires")
@@ -100,6 +107,33 @@ def _device_to_dict(info: DeviceInfo) -> dict[str, Any]:
         "ramp_pending": info.ramp_pending,
         "vbus_mv": info.vbus_mv,
         "led_voltage_mv": info.led_voltage_mv,
+        "dmx_layer_enabled": info.dmx_layer_enabled,
+        "dmx_active_source": info.dmx_active_source,
+        "dmx_level": info.dmx_level,
+        "dmx_fps": info.dmx_fps,
+        "dmx_artnet_port_address": info.dmx_artnet_port_address,
+        "dmx_sacn_universe": info.dmx_sacn_universe,
+        "dmx_last_src_ip": info.dmx_last_src_ip,
+    }
+
+
+def _dmx_to_dict(cfg: DmxConfig) -> dict[str, Any]:
+    return {
+        "layer_enabled": cfg.layer_enabled,
+        "proto_mask": cfg.proto_mask,
+        "artnet_port_address": cfg.artnet_port_address,
+        "artnet_net": cfg.artnet_net,
+        "artnet_subnet": cfg.artnet_subnet,
+        "artnet_universe": cfg.artnet_universe,
+        "sacn_universe": cfg.sacn_universe,
+        "dmx_address": cfg.dmx_address,
+        "personality": cfg.personality,
+        "merge_mode": cfg.merge_mode,
+        "loss_behavior": cfg.loss_behavior,
+        "loss_level": cfg.loss_level,
+        "loss_timeout_ms": cfg.loss_timeout_ms,
+        "smoothing_ms": cfg.smoothing_ms,
+        "allow_artaddress": cfg.allow_artaddress,
     }
 
 
@@ -193,6 +227,26 @@ class FactoryResetRequest(BaseModel):
 class ChangeSecretRequest(BaseModel):
     new_secret_hex: str | None = None  # None -> device generates/we generate a random one
     secret_hex: str | None = None      # current secret, if neither stored nor factory default works
+
+
+class DmxConfigRequest(BaseModel):
+    layer_enabled: bool = False
+    proto_mask: int = 0x03
+    # Art-Net universe expressed as parts (net/subnet/universe); the backend
+    # packs them into the 15-bit port address.
+    artnet_net: int = 0
+    artnet_subnet: int = 0
+    artnet_universe: int = 0
+    sacn_universe: int = 1
+    dmx_address: int = 1
+    personality: int = 0
+    merge_mode: int = 0
+    loss_behavior: int = 0
+    loss_level: int = 0
+    loss_timeout_ms: int = 3000
+    smoothing_ms: int = 25
+    allow_artaddress: bool = True
+    secret_hex: str | None = None
 
 
 # ======================================================================= #
@@ -377,6 +431,49 @@ def api_change_secret(ip: str, body: ChangeSecretRequest, port: int = DEFAULT_PO
     # endpoint, never logged, and this response is never cached (no
     # GET involved).
     return {**_result_to_dict(result), "new_secret_hex": applied_secret.hex() if result.applied else None}
+
+
+# ======================================================================= #
+# DMX / Art-Net / sACN layer
+# ======================================================================= #
+@app.get("/api/devices/{ip}/dmx")
+def api_dmx_get(ip: str, port: int = DEFAULT_PORT, secret_hex: str | None = None):
+    try:
+        with AdminClient(ip, port, DEFAULT_TIMEOUT) as client:
+            info = client.info()
+            secret = _resolve_secret(client, info.serial, secret_hex)
+            cfg = client.get_dmx_config(secret, info.serial)
+    except Exception as e:
+        return _error_response(e)
+    return _dmx_to_dict(cfg)
+
+
+@app.post("/api/devices/{ip}/dmx")
+def api_dmx_set(ip: str, body: DmxConfigRequest, port: int = DEFAULT_PORT):
+    cfg = DmxConfig(
+        layer_enabled=body.layer_enabled,
+        proto_mask=body.proto_mask,
+        artnet_port_address=DmxConfig.from_artnet_parts(
+            body.artnet_net, body.artnet_subnet, body.artnet_universe),
+        sacn_universe=body.sacn_universe,
+        dmx_address=body.dmx_address,
+        personality=body.personality,
+        merge_mode=body.merge_mode,
+        loss_behavior=body.loss_behavior,
+        loss_level=body.loss_level,
+        loss_timeout_ms=body.loss_timeout_ms,
+        smoothing_ms=body.smoothing_ms,
+        allow_artaddress=body.allow_artaddress,
+    )
+    try:
+        with AdminClient(ip, port, DEFAULT_TIMEOUT) as client:
+            info = client.info()
+            secret = _resolve_secret(client, info.serial, body.secret_hex)
+            result = client.set_dmx_config(secret, info.serial, cfg)
+            applied = client.get_dmx_config(secret, info.serial) if result.applied else cfg
+    except Exception as e:
+        return _error_response(e)
+    return {**_result_to_dict(result), "config": _dmx_to_dict(applied)}
 
 
 # ======================================================================= #

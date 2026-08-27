@@ -15,6 +15,7 @@
 #include "eth_init.h"
 #include "devid.h"
 #include "admin_channel.h"
+#include "dmx_input.h"
 #include "status_leds.h"
 
 static const char *TAG = "MAIN";
@@ -36,11 +37,14 @@ static void poweron_settle_cb(void *arg)
     }
 
     ESP_LOGI(TAG, "Power-on settle complete: %s", tps2378_source_name(source));
-    hv9910_enable(HV9910_DEFAULT_RAMP_MS, false);
+    hv9910_enable(HV9910_DEFAULT_RAMP_MS);
 }
 
 /**
- * @brief tps2378 power-ready callback: resumes the driver if it was persisted on.
+ * @brief tps2378 power-ready callback: brings the LED up only if the
+ * network has asked for it on this session (a command received while
+ * power wasn't ready, or an ON that was cut by a power blip). A fresh
+ * boot with no command leaves the LED off -- there is no persisted state.
  * @param source Detected power source.
  * @param ctx Unused.
  * @return None.
@@ -49,7 +53,7 @@ static void on_poe_power_ready(tps2378_source_t source, void *ctx)
 {
     (void)ctx;
 
-    if (!hv9910_was_last_on()) {
+    if (!hv9910_pending_on()) {
         return;
     }
 
@@ -71,7 +75,7 @@ static void on_poe_power_ready(tps2378_source_t source, void *ctx)
         ESP_LOGW(TAG, "Power-on timer failed (%s)", esp_err_to_name(err));
     }
 
-    hv9910_enable(HV9910_DEFAULT_RAMP_MS, false);
+    hv9910_enable(HV9910_DEFAULT_RAMP_MS);
 }
 
 /**
@@ -121,6 +125,9 @@ void app_main(void)
     esp_log_level_set("ETH_INIT", ESP_LOG_INFO);
     esp_log_level_set("DEVID", ESP_LOG_INFO);
     esp_log_level_set("ADMIN_CH", ESP_LOG_INFO);
+    esp_log_level_set("DMX_IN", ESP_LOG_INFO);
+    esp_log_level_set("DMX_ARTNET", ESP_LOG_INFO);
+    esp_log_level_set("DMX_SACN", ESP_LOG_INFO);
 
     status_leds_config_t leds_cfg = {
         .blue_pin = PIN_LED_BLUE,
@@ -181,6 +188,9 @@ void app_main(void)
     };
     esp_err_t eth_err = eth_bringup(&eth_cfg);
     if (eth_err == ESP_OK) {
+        /* DMX layer first: the admin INFO response reads its status. */
+        dmx_input_start();
+
         admin_channel_config_t admin_cfg = {
             .port = ADMIN_UDP_PORT,
         };

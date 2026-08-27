@@ -7,18 +7,19 @@ Firmware for a PoE-powered LED luminaire. It runs on an ESP32, gets power throug
 - Confirms PoE or auxiliary power is stable before releasing the LED.
 - Measures bus voltage and LED voltage.
 - Turns on, turns off, and dims with a smooth ramp.
-- Saves the last on/off state and last brightness to NVS.
+- Always powers up with the LED **off**. No brightness or on/off state is stored — the on-level comes from the first network command (DMX or admin); a bare `ON` uses the last level commanded since boot, or 100% if none.
 - Gets an IP over Ethernet DHCP, announcing itself with the hostname "DriverPoE" (instead of ESP-IDF's default "espressif") in the router's client list.
-- Allows local and remote control over an authenticated UDP channel (`tools/lumtool.py`, or the web UI in `tools/webui/`).
+- Allows local and remote control over an authenticated UDP channel (`tools/device_api/`, or the web UI in `tools/webui/`).
+- Receives **Art-Net** and **sACN (E1.31)** once commissioned, so any lighting console or show software drives it as a 1- or 2-channel DMX dimmer — see "DMX / Art-Net / sACN layer" below.
 - Receives firmware updates (OTA) over that same administrative UDP channel, with SHA-256 verification of the image before applying it.
 
-The product is Ethernet/PoE only: no Wi-Fi, no Bluetooth, no Matter. The only control protocol is the custom administrative UDP channel described below.
+The product is Ethernet/PoE only: no Wi-Fi, no Bluetooth, no Matter. Two control planes share the wire: the authenticated administrative UDP channel (maintenance, commissioning, OTA) and the unauthenticated DMX-over-Ethernet layer (Art-Net/sACN) — see both sections below.
 
 ## How it works
 
 On boot, the LED driver starts off. The firmware watches the TPS2378's signals and VBUS voltage. It only considers power valid once a source is detected and the bus is above 40 V. If power drops, it disables the driver immediately.
 
-Ethernet only starts once power is confirmed; from there the firmware starts the administrative UDP channel. If the LED was on before a restart, it turns back on (at the same brightness) as soon as power is confirmed — including when that "turn on" was requested remotely while power wasn't ready yet (see "Administrative channel" below). `INFO` always reports the exact reason for a pending block (CDB/T2P/VBUS), even though today it's only reachable once power has already been confirmed.
+Ethernet only starts once power is confirmed; from there the firmware starts the administrative UDP channel and the DMX layer. The LED stays off until a network command lights it — a restart is not remembered. It does come back on by itself after a *power blip* (power lost then reconfirmed) if it was on when power dropped, and it comes on once power is confirmed if an `ON`/`DIM` arrived while power wasn't ready yet (see "Administrative channel" below) — both are volatile, in-RAM intent, not stored. `INFO` always reports the exact reason for a pending block (CDB/T2P/VBUS), even though today it's only reachable once power has already been confirmed.
 
 | Indicator | GPIO | Meaning |
 | --- | --- | --- |
@@ -27,21 +28,48 @@ Ethernet only starts once power is confirmed; from there the firmware starts the
 
 ## Administrative channel
 
-Custom binary protocol over UDP, port `5001` (`ADMIN_UDP_PORT`), version `4` (`ADMIN_PROTO_VERSION` in `components/admin_channel/admin_protocol.h`).
+Custom binary protocol over UDP, port `5001` (`ADMIN_UDP_PORT`), version `5` (`ADMIN_PROTO_VERSION` in `components/admin_channel/admin_protocol.h`). A packet whose version byte isn't `5` is dropped, both ways.
 
-**Security model**: each unit has a 32-byte secret (`components/devid/devid.h`), written to NVS automatically with a documented factory-default value (`ADMIN_DEFAULT_SECRET`, in `main/poe_luminaire_main.h`) on first boot — and again after any `FACTORY_RESET`, which erases the same NVS partition the secret lives in. `INFO` is the only unauthenticated command (pure read, no side effect, answered to anyone — including broadcast). Every command that changes something (`ON`/`OFF`/`DIM`/`IDENTIFY`/`REBOOT`/`FACTORY_RESET`/`CHANGE_SECRET`) requires HMAC-SHA256 with the active secret **and** a single-use nonce obtained via `CHALLENGE` immediately before, bound to the source IP and short-lived (5 s) — this protects against replaying a captured packet, not just forgery. `CHANGE_SECRET` swaps the secret directly (payload encrypted with AES-256-GCM under the current secret), with no separate confirmation step.
+**Security model**: each unit has a 32-byte secret (`components/devid/devid.h`), written to NVS automatically with a documented factory-default value (`ADMIN_DEFAULT_SECRET`, in `main/poe_luminaire_main.h`) on first boot — and again after any `FACTORY_RESET`, which erases the same NVS partition the secret lives in. `INFO` is the only unauthenticated command (pure read, no side effect, answered to anyone — including broadcast). Every command that changes something (`ON`/`OFF`/`DIM`/`IDENTIFY`/`REBOOT`/`FACTORY_RESET`/`CHANGE_SECRET`/`DMX_SET_CONFIG`) — and `DMX_GET_CONFIG` — requires HMAC-SHA256 with the active secret **and** a single-use nonce obtained via `CHALLENGE` immediately before, bound to the source IP and short-lived (5 s) — this protects against replaying a captured packet, not just forgery. `CHANGE_SECRET` swaps the secret directly (payload encrypted with AES-256-GCM under the current secret), with no separate confirmation step.
 
 The default secret is known (it's in this repository) — this layer's real security comes from changing it during installation, not from keeping it secret. Treat it like the default password printed on the bottom of a home router.
 
 Each device also rate-limits incoming packets to 40 per second per source IP (`admin_channel.c`, `RATE_LIMIT_MAX_PER_WINDOW`); anything past that is silently dropped, with no response at all — indistinguishable on the wire from the packet never arriving. A client that dims or sends other write commands at a high, sustained rate (a lighting effect, a music-reactive mode) needs to stay comfortably under this, and should expect an occasional dropped update to be normal rather than a bug.
 
-**`ON`/`DIM` semantics**: the admin channel only starts listening after power has already been confirmed, so in practice this is rarely hit — but if an `ON` or `DIM>0` arrives while `tps2378_is_ready()` is false (e.g. power dropped and hasn't returned yet), the command is accepted and the intent is persisted anyway (never turning the driver on outside the TPS2378's electrical gate) — the response uses the `ACCEPTED_PENDING` status, distinct from `OK`, to make that explicit to the caller. The LED turns on by itself, at the requested brightness, as soon as power is confirmed (or reconfirmed). `OFF`/`DIM 0` always apply and normally persist immediately, regardless of power state — see the ramp/persistence notes below for the two ways that's more nuanced than it sounds.
+**`ON`/`DIM` semantics**: the admin channel only starts listening after power has already been confirmed, so in practice this is rarely hit — but if an `ON` or `DIM>0` arrives while `tps2378_is_ready()` is false (e.g. power dropped and hasn't returned yet), the command is accepted and the intent is recorded in RAM (never turning the driver on outside the TPS2378's electrical gate) — the response uses the `ACCEPTED_PENDING` status, distinct from `OK`, to make that explicit to the caller. The LED turns on by itself, at the requested brightness, as soon as power is confirmed. A bare `ON` (no brightness) comes up at the last level commanded since boot, or 100% if none. `OFF`/`DIM 0` always apply immediately regardless of power state — see the ramp notes below for the way that's more nuanced than it sounds.
 
-**`DIM`'s ramp and the "transient" flag**: `DIM`'s payload is `percent` (1 byte) + `ramp_ms` (4 bytes, big-endian), with an optional 6th byte since this session's changes: a flags byte whose bit 0 means "transient". A 5-byte payload (every client before this addition, and still the default from `tools/device_api/client.py`'s `dim()`) always persists the new brightness to NVS as the resume value, exactly as before. Setting the transient bit skips that NVS write entirely — meant for a caller that dims at several times a second (an effect, a music-reactive mode): persisting every single one of those would mean a blocking flash commit on the same task that also drains the device's own command queue, and enough of them in a row makes the queue back up, so the driver's actual brightness visibly lags further and further behind what was just requested. `tools/webui_demo` sets this flag for every dim its effects and reactive-to-sound mode send; a plain slider drag from `tools/webui` does not, since that's a deliberate, infrequent brightness choice worth remembering.
+**`DIM`'s ramp**: `DIM`'s payload is `percent` (1 byte) + `ramp_ms` (4 bytes, big-endian). Nothing about brightness is persisted — the LED is off after any reboot and its level comes from the network. High-rate brightness control (effects, music, chases) belongs on the DMX layer (Art-Net/sACN), not on a stream of `DIM` commands: `DIM` still goes through the admin channel's HMAC + nonce + 40-packet/s rate limit.
 
 Dimming to 0 with a nonzero ramp doesn't cut power the instant the command is received — it fades the PWM duty down first, and only asserts the driver's hardware SHUTDOWN pin once that fade genuinely finishes on the LEDC peripheral (a hardware fade-completion callback confirms this, not a wall-clock guess), so a fixture commanded to fade out and immediately commanded to something else again mid-fade never gets stuck partway between the two.
 
-`FACTORY_RESET` erases the unit's entire NVS partition: saved brightness/on-off state and the administrative secret (which reverts to the factory default).
+`FACTORY_RESET` erases the unit's entire NVS partition: the administrative secret (which reverts to the factory default) **and the DMX layer configuration** (`components/dmx_input/`, NVS namespace `"dmx"` — reverts to the disabled default). `hv9910` keeps no NVS state, so there's nothing there to reset — the LED is off after any reboot regardless.
+
+## DMX / Art-Net / sACN layer
+
+`components/dmx_input/` is the standard control layer: an Art-Net and sACN receiver that maps DMX channel data onto the LED brightness. It's disabled by default and opt-in during commissioning (universe + DMX start address + personality). Once configured, any lighting console or show software (grandMA, Chamsys, QLC+, Resolume, MADRIX, …) drives the fixture directly — no custom tooling on the control side.
+
+**Trust model**: Art-Net and sACN have **no authentication** — by design, exactly like physical DMX. The DMX layer (and Art-Net `ArtAddress` remote programming) is only as safe as the network it's on; keep the device on a trusted management/entertainment LAN. The administrative channel (maintenance, OTA, secret) stays independent and authenticated. The DMX layer is disabled until you enable it.
+
+**Arbitration**: while a valid DMX signal is present it drives the brightness; an admin `ON`/`OFF`/`DIM` still applies but is overridden by the next DMX frame (~22 ms). When every DMX source times out, the configured signal-loss behavior fires once and admin control resumes.
+
+All DMX actuation goes through the `hv9910` driver, which keeps no NVS state — a running show never touches flash. Output is applied on a ~45 Hz tick (just above the DMX512 / Art-Net ceiling of ~44 frames/s, so no distinct frame is dropped) that decouples the receive rate from actuation. The TPS2378 power gate still applies: the LED never lights until power is confirmed.
+
+| Protocol | Port | Addressing |
+| --- | --- | --- |
+| Art-Net | UDP 6454 (broadcast + unicast) | 15-bit Port-Address = Net(0–127) : Sub-Net(0–15) : Universe(0–15). Answers `ArtPoll` with `ArtPollReply` (discoverable/named in consoles). Honors `ArtAddress` if `allow_artaddress` is set. |
+| sACN (E1.31) | UDP 5568 (multicast `239.255.<hi>.<lo>` + unicast) | Universe 1–63999. Honors the `priority` field (0–200) and `stream_terminated`. IGMP multicast is built into ESP-IDF's lwIP. |
+
+**Personalities**: 1 channel (intensity, 8-bit) or 2 channels (intensity, 16-bit — MSB then LSB). **Merge**: HTP (default) or LTP across simultaneously-active sources; the highest `priority` wins first, then the merge mode. **Signal-loss behavior**: hold last level / fade to black / fade to a set level, after a configurable timeout (default 3 s).
+
+Configuration is stored in NVS (namespace `"dmx"`) and set the way commercial nodes are set: through a management tool over the authenticated admin channel (`DMX_GET_CONFIG`/`DMX_SET_CONFIG` — `tools/device_api` CLI menu "3", or the "DMX settings" card in `tools/webui/`), or over the network with Art-Net `ArtAddress` from a lighting console. RDM is not implemented.
+
+`tools/dmxtool/` is a stdlib-only Art-Net/sACN test transmitter for exercising the layer without a console:
+
+```powershell
+Set-Location tools
+python -m dmxtool artnet --ip 192.168.1.255 --universe 0 --channel 1 --ramp
+python -m dmxtool sacn --universe 1 --channel 1 --value 200
+```
 
 ### Host tools
 
@@ -51,12 +79,12 @@ All of the protocol/HMAC/AES-GCM/discovery logic lives in a single pure Python p
 
 | Module | Contents |
 | --- | --- |
-| `protocol.py` | Constants, `Packet` (serialization/HMAC), identity (MAC/serial), `parse_info_payload()`. |
-| `client.py` | `AdminClient` (one UDP socket per unit; `info/challenge/on/off/dim/identify/reboot/factory_reset/change_secret`), typed exceptions (`DeviceTimeoutError`, `AuthError`, `ProtocolError`/`ProtocolVersionMismatchError`, `CommandRefusedError`, `MissingDependencyError`), `find_working_secret()`/`connect()`. |
+| `protocol.py` | Constants, `Packet` (serialization/HMAC), identity (MAC/serial), `parse_info_payload()`, `DmxConfig` + `pack_dmx_config()`/`parse_dmx_config()`. |
+| `client.py` | `AdminClient` (one UDP socket per unit; `info/challenge/on/off/dim/identify/reboot/factory_reset/change_secret`, `get_dmx_config`/`set_dmx_config`, `ota_update`), typed exceptions (`DeviceTimeoutError`, `AuthError`, `ProtocolError`/`ProtocolVersionMismatchError`, `CommandRefusedError`, `MissingDependencyError`), `find_working_secret()`/`connect()`. |
 | `discovery.py` | `broadcast_info()`, `resolve_device_by_ip()`, `guess_broadcast_address()`. |
-| `models.py` | `DeviceInfo` (with `power_blocking_reason`), `CommandResult` (`accepted`/`applied`/`pending`, `raise_if_refused()`). |
+| `models.py` | `DeviceInfo` (with `power_blocking_reason` and the `dmx_*` status fields), `CommandResult` (`accepted`/`applied`/`pending`, `raise_if_refused()`). |
 | `secrets.py` | `SecretStore` (minimal protocol: `get/set/delete`), `JsonFileSecretStore` (`tools/admin_secrets.json`, gitignored), `MemorySecretStore`. |
-| `cli.py` | The interactive menu — the only place in the package with terminal I/O. |
+| `cli.py` | The interactive menu (device menu "3" = DMX / Art-Net / sACN) — the only place in the package with terminal I/O. |
 
 ```powershell
 python -c "from device_api import discovery, connect, JsonFileSecretStore; d=discovery.broadcast_info(discovery.guess_broadcast_address()); print(d)"
@@ -70,9 +98,9 @@ Set-Location tools
 python -m webui.app   # or: uvicorn webui.app:app --reload
 ```
 
-Open `http://127.0.0.1:8000/`. It's a local tool with no authentication of its own (same posture as the UDP channel: anyone who can reach the UI can send authenticated commands) — don't expose it outside a trusted management network.
+Open `http://127.0.0.1:8000/`. It's a local tool with no authentication of its own (same posture as the UDP channel: anyone who can reach the UI can send authenticated commands) — don't expose it outside a trusted management network. Each device card has a **"DMX settings"** button for commissioning the Art-Net/sACN layer and a live DMX status readout.
 
-**`tools/webui_demo/`** — a standalone demo UI for presenting the network as a stage: group commands, dimmer, one-fixture-at-a-time identify, pulse/wave scenes, and brightness reactive to a local audio file. Reuses the `device_api` package and the same local secret storage as the admin WebUI:
+**`tools/webui_demo/`** — a standalone demo UI for presenting the network as a stage: master dimmer, one-fixture-at-a-time identify, pulse/wave scenes, and brightness reactive to a local audio file. It drives fixtures over **Art-Net** (`tools/webui_demo/artnet.py` streams ArtDmx continuously from a background thread) — **not** the admin channel. Commission each fixture in the admin WebUI first (enable the DMX layer, set its universe / DMX address / personality); the demo reads that patch once at scan time (INFO + `DMX_GET_CONFIG`, the only authenticated calls it makes) and then every scene, the dimmer and the sound-reactive mode are just writes into the Art-Net stream — no HMAC, no nonce, no per-IP rate limit. "Blackout & release" stops the stream; after each fixture's signal-loss timeout the admin channel takes back control.
 
 ```powershell
 pip install -r tools/webui_demo/requirements.txt
@@ -98,6 +126,7 @@ This board's main configuration:
 | LED driver | HV9910, 10 kHz PWM |
 | Minimum VBUS | 40 V |
 | Flash | 4 MB, two OTA partitions |
+| Control ports | UDP 5001 (admin, authenticated), UDP 6454 (Art-Net), UDP 5568 (sACN) |
 
 ## Build and flash
 
@@ -111,11 +140,12 @@ idf.py -p COM_X flash monitor
 
 Replace `COM_X` with the board's serial port.
 
-To run the host tools' test suite (protocol, client, discovery, models, secrets):
+To run the host tools' test suite (protocol, client, discovery, models, secrets, DMX config):
 
 ```powershell
 Set-Location tools
 python -m unittest discover -s device_api/tests -v
+python -m unittest discover -s dmxtool/tests -v   # Art-Net/sACN packet wire format
 ```
 
 ## Structure
@@ -128,14 +158,16 @@ python -m unittest discover -s device_api/tests -v
 | `components/voltage_sense/` | VBUS and LED voltage readings via ADC. |
 | `components/eth_init/` | RMII Ethernet and DHCP. |
 | `components/admin_channel/` | Authenticated UDP protocol. |
+| `components/dmx_input/` | Art-Net + sACN receiver, source merge, and DMX→brightness mapping. |
 | `components/devid/` | Serial, MAC, and administrative secret. |
 | `components/status_leds/` | Board status LEDs. |
-| `tools/device_api/` | Python package: protocol, client, discovery, models, secrets. |
+| `tools/device_api/` | Python package: protocol, client, discovery, models, secrets, DMX config. |
 | `tools/webui/` | Local web UI (FastAPI), built on `tools/device_api/`. |
+| `tools/dmxtool/` | Stdlib-only Art-Net/sACN test transmitter. |
 
 ## OTA update
 
-The image is transferred over the **same administrative UDP channel** (`ADMIN_TYPE_OTA_BEGIN/OTA_CHUNK/OTA_END/OTA_ABORT`, protocol version `4`) — no HTTP client in the firmware, no new network surface. Flow:
+The image is transferred over the **same administrative UDP channel** (`ADMIN_TYPE_OTA_BEGIN/OTA_CHUNK/OTA_END/OTA_ABORT`) — no HTTP client in the firmware, no new network surface. Flow:
 
 1. `OTA_BEGIN` (HMAC + nonce) announces the total size and the SHA-256 of the complete image.
 2. `OTA_CHUNK` (HMAC, no nonce — see the `needs_pool_nonce` comment in `admin_channel.c` for why) sends the image in chunks of up to 1024 bytes, each acknowledged with the total written so far — losing a response is safe, the client just resends the same chunk.
