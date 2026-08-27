@@ -92,10 +92,11 @@ All of the protocol/HMAC/AES-GCM/discovery logic lives in a single pure Python p
 # one entry per line:  <serial | MAC tail | fallback token>  <64 hex chars>
 DriverPoE-A4CF12B93D08   b64c3218d228279b9b2190c685de3dab76325f4e5482ba452f917b2e19762ad9
 A1B2C3D4E5F6             0011223344556677889900aabbccddeeff00112233445566778899aabbccddeeff
-all others              ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+all others               b64c3218d228279b9b2190c685de3dab76325f4e5482ba452f917b2e19762ad9   # units you re-keyed
+all others               447269766572506f452d64656661756c742d61646d696e2d7365637265742121   # units still on the default
 ```
 
-Separators: whitespace or `/ : = ,`. Fallback tokens (`*`, `any`, `all others`, ...) set the key tried for serials not listed — so one operator key can cover a whole rig. **The compiled-in factory default is never tried on its own**: if your units are still on it, put that value (`b"DriverPoE-default-admin-secret!!"`.hex()) in the file as `all others`. `CHANGE_SECRET`'s new key is kept in RAM for the rest of the session and shown once to the operator; save it into your file yourself.
+Separators: whitespace or `/ : = ,`. A `*` / `any` / `all others` line is a fallback key tried for serials with no explicit entry — **more than one is allowed**, tried in file order, so "some units re-keyed, the rest still on the factory default, don't remember which" just works. **The compiled-in factory default is never tried on its own**; put its value (`b"DriverPoE-default-admin-secret!!"`.hex() = `4472697665...2121`) in the file if you need it. `CHANGE_SECRET`'s new key is kept in RAM for the rest of the session and shown once to the operator; save it into your file yourself.
 
 - **CLI**: `python -m device_api.cli path/to/keys.txt` (or `$DRIVERPOE_KEYS`); with no file it prompts for a secret per unit.
 - **Web UI**: a **"Keys file"** button next to *Scan*; each card then shows an **Admin auth** pill — `authenticated` (a key from your file works), `factory default` (the working key *is* the public default value — the unit is *not* protected), or `no key`.

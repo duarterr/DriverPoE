@@ -410,7 +410,8 @@ def _open_store() -> SecretStore:
         raise SystemExit(f"keys file: {e}")
     s = store.stats()
     print(f"Loaded {s['count']} key(s) from {path}"
-          + (" + a fallback ('all others')" if s["has_fallback"] else "") + " -- held in memory only.")
+          + (f" + {s['fallback_count']} fallback(s)" if s["fallback_count"] else "")
+          + " -- held in memory only.")
     return store
 
 

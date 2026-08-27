@@ -58,13 +58,13 @@ def audit(ip: str, keychain: KeyfileSecretStore | None) -> None:
     line = f"{info.serial} @ {ip}: {verdict}"
 
     if keychain is not None:
-        k = keychain.get(info.serial)
-        if k is None:
+        cands = keychain.candidates(info.serial)
+        if not cands:
             line += f"  {DIM}(no key in the file for this unit){RESET}"
-        elif _challenge_ok(client, k, info.serial):
+        elif any(_challenge_ok(client, k, info.serial) for k in cands):
             line += f"  {GREEN}keys-file key works{RESET}"
         else:
-            line += f"  {RED}keys-file key MISMATCH{RESET}"
+            line += f"  {RED}no keys-file key works{RESET}"
     print(line)
     client.close()
 

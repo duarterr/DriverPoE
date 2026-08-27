@@ -35,10 +35,10 @@ class TestParseKeysFile(unittest.TestCase):
             0011223344FF          / {K2}
             all others            = {KF}
         """
-        by_serial, fallback = parse_keys_file(text)
+        by_serial, fallbacks = parse_keys_file(text)
         self.assertEqual(by_serial["DriverPoE-A4CF12B93D08"], bytes.fromhex(K1))
         self.assertEqual(by_serial["0011223344FF"], bytes.fromhex(K2))
-        self.assertEqual(fallback, bytes.fromhex(KF))
+        self.assertEqual(fallbacks, [bytes.fromhex(KF)])
 
     def test_separators(self):
         for sep in ("  ", " / ", ":", " = ", ", "):
@@ -47,17 +47,21 @@ class TestParseKeysFile(unittest.TestCase):
 
     def test_fallback_tokens(self):
         for tok in ("*", "any", "all others", "ALL OTHERS", "default", "rest"):
-            _, fallback = parse_keys_file(f"{tok} {KF}")
-            self.assertEqual(fallback, bytes.fromhex(KF))
+            _, fallbacks = parse_keys_file(f"{tok} {KF}")
+            self.assertEqual(fallbacks, [bytes.fromhex(KF)])
+
+    def test_multiple_fallbacks_kept_in_order(self):
+        _, fallbacks = parse_keys_file(f"all others {K1}\n* {K2}\nany {K1}")
+        self.assertEqual(fallbacks, [bytes.fromhex(K1), bytes.fromhex(K2)])  # dedup, order preserved
 
     def test_bare_key_line_is_fallback(self):
-        _, fallback = parse_keys_file(KF)
-        self.assertEqual(fallback, bytes.fromhex(KF))
+        _, fallbacks = parse_keys_file(KF)
+        self.assertEqual(fallbacks, [bytes.fromhex(KF)])
 
     def test_comments_and_blank_lines_ignored(self):
-        by_serial, fb = parse_keys_file(f"# header\n\n   \nS1 {K1}   # inline comment\n\n")
+        by_serial, fbs = parse_keys_file(f"# header\n\n   \nS1 {K1}   # inline comment\n\n")
         self.assertEqual(by_serial, {"S1": bytes.fromhex(K1)})
-        self.assertIsNone(fb)
+        self.assertEqual(fbs, [])
 
     def test_empty_file_rejected(self):
         with self.assertRaises(KeysFileError):
@@ -87,6 +91,15 @@ class TestKeyfileSecretStore(unittest.TestCase):
         s = KeyfileSecretStore()
         s.load_text(f"S1 {K1}")
         self.assertIsNone(s.get("S2"))
+        self.assertEqual(s.candidates("S2"), [])
+
+    def test_candidates_order(self):
+        s = KeyfileSecretStore()
+        s.load_text(f"DriverPoE-CCCCCCCCCCCC {K1}\nall others {K2}\n* {KF}")
+        self.assertEqual(s.candidates("DriverPoE-CCCCCCCCCCCC"),
+                         [bytes.fromhex(K1), bytes.fromhex(K2), bytes.fromhex(KF)])
+        self.assertEqual(s.candidates("DriverPoE-ZZZZZZZZZZZZ"),
+                         [bytes.fromhex(K2), bytes.fromhex(KF)])
 
     def test_set_is_session_only_and_get_reflects_it(self):
         s = self._store()
@@ -112,7 +125,7 @@ class TestKeyfileSecretStore(unittest.TestCase):
         self.assertIsNone(s.get("anything"))
 
     def test_stats(self):
-        self.assertEqual(self._store().stats(), {"count": 2, "has_fallback": True})
+        self.assertEqual(self._store().stats(), {"count": 2, "fallback_count": 1})
 
 
 class TestMemorySecretStore(unittest.TestCase):
