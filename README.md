@@ -83,14 +83,21 @@ All of the protocol/HMAC/AES-GCM/discovery logic lives in a single pure Python p
 | `client.py` | `AdminClient` (one UDP socket per unit; `info/challenge/on/off/dim/identify/reboot/factory_reset/change_secret`, `get_dmx_config`/`set_dmx_config`, `ota_update`), typed exceptions (`DeviceTimeoutError`, `AuthError`, `ProtocolError`/`ProtocolVersionMismatchError`, `CommandRefusedError`, `MissingDependencyError`), `find_working_secret()`/`connect()`. |
 | `discovery.py` | `broadcast_info()`, `resolve_device_by_ip()`, `guess_broadcast_address()`. |
 | `models.py` | `DeviceInfo` (with `power_blocking_reason` and the `dmx_*` status fields), `CommandResult` (`accepted`/`applied`/`pending`, `raise_if_refused()`). |
-| `secrets.py` | `SecretStore` (minimal protocol: `get/set/delete`), `JsonFileSecretStore` (`tools/admin_secrets.json`, gitignored), `MemorySecretStore`. |
+| `secrets.py` | `SecretStore` (minimal protocol: `get/set/delete`), `EncryptedFileSecretStore` (AES-256-GCM, key = scrypt(passphrase)), `MemorySecretStore`, `default_vault_path()`, `bootstrap_store()`. |
 | `cli.py` | The interactive menu (device menu "3" = DMX / Art-Net / sACN) — the only place in the package with terminal I/O. |
 
+**Per-unit admin secrets** live in a passphrase-locked vault, not on disk in the clear and never in a commit:
+
+- The vault file is `secrets.vault`, **outside the repo** by default (`%APPDATA%\driverpoe\` on Windows, `~/.config/driverpoe/` elsewhere; `$DRIVERPOE_VAULT` overrides). The file is AES-256-GCM ciphertext — the passphrase is only ever held in RAM (as a derived key) for the process's lifetime.
+- The CLI prompts for the passphrase at startup (or offers to create a vault, or falls back to RAM-only where you type each unit's secret per session). `$DRIVERPOE_VAULT_PASSPHRASE` skips the prompt for scripting (less safe).
+- The web UIs stay locked until the operator unlocks the vault (a modal → `POST /api/vault/unlock`); every device endpoint returns `423` before that.
+- A `CHANGE_SECRET` writes the new secret straight into the vault (and, in the web UI, is shown once to the operator who requested it).
+
 ```powershell
-python -c "from device_api import discovery, connect, JsonFileSecretStore; d=discovery.broadcast_info(discovery.guess_broadcast_address()); print(d)"
+python -c "from device_api import discovery, MemorySecretStore, connect; d=discovery.broadcast_info(discovery.guess_broadcast_address()); print(d)"
 ```
 
-**`tools/webui/`** — local web UI (FastAPI + plain HTML/JS, no frontend framework), consuming the `device_api` package exclusively on the backend; the admin secret is never sent to the browser except once, back to the operator, right after a `CHANGE_SECRET` they themselves requested:
+**`tools/webui/`** — local web UI (FastAPI + plain HTML/JS, no frontend framework), consuming the `device_api` package exclusively on the backend. On first load it prompts to unlock the secret vault; a secret is only ever sent to the browser once, back to the operator, right after a `CHANGE_SECRET` they themselves requested:
 
 ```powershell
 pip install -r tools/webui/requirements.txt
@@ -98,9 +105,9 @@ Set-Location tools
 python -m webui.app   # or: uvicorn webui.app:app --reload
 ```
 
-Open `http://127.0.0.1:8000/`. It's a local tool with no authentication of its own (same posture as the UDP channel: anyone who can reach the UI can send authenticated commands) — don't expose it outside a trusted management network. Each device card has a **"DMX settings"** button for commissioning the Art-Net/sACN layer and a live DMX status readout.
+Open `http://127.0.0.1:8000/`. It binds localhost and has no operator login beyond the vault passphrase — while the vault is unlocked, anything that can reach the port can command any unit, so run it on the operator's own machine and don't expose it. Each device card has a **"DMX settings"** button for commissioning the Art-Net/sACN layer and a live DMX status readout.
 
-**`tools/webui_demo/`** — a standalone demo UI for presenting the network as a stage: master dimmer, one-fixture-at-a-time identify, pulse/wave scenes, and brightness reactive to a local audio file. It drives fixtures over **Art-Net** (`tools/webui_demo/artnet.py` streams ArtDmx continuously from a background thread) — **not** the admin channel. Commission each fixture in the admin WebUI first (enable the DMX layer, set its universe / DMX address / personality); the demo reads that patch once at scan time (INFO + `DMX_GET_CONFIG`, the only authenticated calls it makes) and then every scene, the dimmer and the sound-reactive mode are just writes into the Art-Net stream — no HMAC, no nonce, no per-IP rate limit. "Blackout & release" stops the stream; after each fixture's signal-loss timeout the admin channel takes back control.
+**`tools/webui_demo/`** — a standalone demo UI for presenting the network as a stage: master dimmer, one-fixture-at-a-time identify, pulse/wave scenes, and brightness reactive to a local audio file. It drives fixtures over **Art-Net** (`tools/webui_demo/artnet.py` streams ArtDmx continuously from a background thread) — **not** the admin channel. Commission each fixture in the admin WebUI first (enable the DMX layer, set its universe / DMX address / personality); the demo reads that patch once at scan time (INFO + `DMX_GET_CONFIG` — the only authenticated calls it makes, so it too prompts to unlock the vault) and then every scene, the dimmer and the sound-reactive mode are just writes into the Art-Net stream — no HMAC, no nonce, no per-IP rate limit. "Blackout & release" stops the stream; after each fixture's signal-loss timeout the admin channel takes back control.
 
 ```powershell
 pip install -r tools/webui_demo/requirements.txt

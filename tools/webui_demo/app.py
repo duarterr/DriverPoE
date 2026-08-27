@@ -12,9 +12,11 @@ the sound-reactive mode are all just writes into that Art-Net stream -- no
 HMAC, no nonce, no per-IP rate limit.
 
 The only authenticated calls this app makes are read-only and one-time:
-INFO (discovery) and DMX_GET_CONFIG (learn the patch). Stop the app and,
-after each fixture's signal-loss timeout, the admin channel takes over
-again.
+INFO (discovery) and DMX_GET_CONFIG (learn the patch). Those need the
+per-unit admin secret, which comes from the encrypted vault -- unlock it
+once via POST /api/vault/unlock (or $DRIVERPOE_VAULT_PASSPHRASE), same as
+tools/webui/. Stop the app and, after each fixture's signal-loss timeout,
+the admin channel takes over again.
 """
 from __future__ import annotations
 
@@ -32,14 +34,34 @@ from starlette.concurrency import run_in_threadpool
 from device_api import discovery
 from device_api.client import AdminClient, AuthError, DeviceTimeoutError, DriverPoEError, find_working_secret
 from device_api.protocol import DEFAULT_PORT, DEFAULT_TIMEOUT, SECRET_LEN, ProtocolVersionMismatchError
-from device_api.secrets import DEFAULT_SECRETS_FILE, JsonFileSecretStore
+from device_api.secrets import (
+    EncryptedFileSecretStore,
+    SecretStore,
+    VaultError,
+    VaultLocked,
+    bootstrap_store,
+    default_vault_path,
+)
 
 from .artnet import ArtNetSender
 from .audio_reactive import ReactiveMapper
 
 app = FastAPI(title="DriverPoE Demo", description="Art-Net presentation controls for DriverPoE luminaires")
 _static_dir = Path(__file__).resolve().parent / "static"
-_secret_store = JsonFileSecretStore(DEFAULT_SECRETS_FILE)
+
+# The only authenticated calls this app makes are the one-time DMX_GET_CONFIG
+# reads at scan time. Per-unit secrets come from the encrypted vault
+# (unlock via POST /api/vault/unlock or $DRIVERPOE_VAULT_PASSPHRASE); with
+# no vault, a RAM-only store + per-request secret_hex.
+_vault_state, _secret_store = bootstrap_store()
+_vault_lock = threading.Lock()
+
+
+def _require_store() -> SecretStore:
+    with _vault_lock:
+        if _secret_store is None:
+            raise HTTPException(423, "Secret vault is locked -- POST /api/vault/unlock first.")
+        return _secret_store
 
 _sender = ArtNetSender()
 _sender.start()
@@ -89,6 +111,40 @@ class SpectrumRequest(BaseModel):
     items: list[SpectrumItem] = Field(min_length=1, max_length=64)
 
 
+class UnlockRequest(BaseModel):
+    passphrase: str
+    create: bool = False
+
+
+# ======================================================================= #
+# Secret vault (unlocked once; passphrase never stored)
+# ======================================================================= #
+@app.get("/api/vault")
+def api_vault():
+    with _vault_lock:
+        state = "unlocked" if _secret_store is not None else _vault_state
+        count = len(_secret_store.serials()) if isinstance(_secret_store, EncryptedFileSecretStore) else None
+    return {"state": state, "path": str(default_vault_path()), "secret_count": count}
+
+
+@app.post("/api/vault/unlock")
+def api_vault_unlock(body: UnlockRequest):
+    global _secret_store, _vault_state
+    if not body.passphrase:
+        raise HTTPException(400, "passphrase must not be empty")
+    path = default_vault_path()
+    try:
+        store = EncryptedFileSecretStore(path, body.passphrase, create=body.create and not path.exists())
+    except VaultLocked:
+        raise HTTPException(401, "Wrong vault passphrase.")
+    except VaultError as e:
+        raise HTTPException(400, f"Vault: {e}")
+    with _vault_lock:
+        _secret_store = store
+        _vault_state = "unlocked"
+    return {"state": "unlocked", "secret_count": len(store.serials()), "created": store.is_new}
+
+
 # ======================================================================= #
 # Discovery + patch
 # ======================================================================= #
@@ -108,9 +164,10 @@ def _resolve_secret(client: AdminClient, serial: str, secret_hex: str | None) ->
             raise HTTPException(400, f"secret_hex must contain {SECRET_LEN} bytes")
         return value
 
-    secret, _ = find_working_secret(client, serial, _secret_store, manual_secret_provider=manual)
+    store = _require_store()
+    secret, _ = find_working_secret(client, serial, store, manual_secret_provider=manual)
     if used_manual:
-        _secret_store.set(serial, secret)
+        store.set(serial, secret)
     return secret
 
 
@@ -181,11 +238,18 @@ def _error(e: Exception) -> JSONResponse:
         return JSONResponse(status_code=409, content={"error": "version_mismatch", "message": str(e)})
     if isinstance(e, (AuthError, DriverPoEError)):
         return JSONResponse(status_code=400, content={"error": "device_error", "message": str(e)})
+    if isinstance(e, HTTPException) and e.status_code == 423:
+        return JSONResponse(status_code=423, content={"error": "vault_locked", "message": e.detail})
     raise e
 
 
 @app.post("/api/scan")
 def scan(body: ScanRequest):
+    try:
+        _require_store()   # fail fast + cleanly if the vault is still locked
+    except HTTPException as e:
+        return _error(e)
+
     bcast = body.broadcast or discovery.guess_broadcast_address()
     try:
         found = discovery.broadcast_info(bcast, DEFAULT_PORT, DEFAULT_TIMEOUT)
@@ -196,7 +260,7 @@ def scan(body: ScanRequest):
     try:
         with ThreadPoolExecutor(max_workers=min(16, max(1, len(found)))) as pool:
             entries = list(pool.map(lambda info: _probe_fixture(info, body.secret_hex), found))
-    except AuthNeeded as e:
+    except (AuthNeeded, HTTPException) as e:
         return _error(e)
 
     # Fixture order = the DMX patch order: universe, then start address.

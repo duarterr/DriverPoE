@@ -1,0 +1,7 @@
+# device_api core has no third-party dependencies.
+#
+# 'cryptography' is needed only for:
+#   - AdminClient.change_secret()          (AES-256-GCM of the new secret)
+#   - EncryptedFileSecretStore             (the passphrase-locked vault)
+# The CLI works without it (RAM-only secret store, no change-secret).
+cryptography>=42

@@ -9,8 +9,8 @@ destructive-action-confirmation UX the original tools/lumtool.py had.
 from __future__ import annotations
 
 import getpass
+import os
 import socket
-from pathlib import Path
 
 from . import discovery
 from .client import (
@@ -31,7 +31,14 @@ from .protocol import (
     SECRET_LEN,
     DmxConfig,
 )
-from .secrets import DEFAULT_SECRETS_FILE, JsonFileSecretStore, SecretStore
+from .secrets import (
+    EncryptedFileSecretStore,
+    MemorySecretStore,
+    SecretStore,
+    VaultError,
+    VaultLocked,
+    default_vault_path,
+)
 
 
 def _prompt_admin_secret(serial: str) -> bytes:
@@ -390,9 +397,45 @@ def device_menu(serial: str, ip: str, store: SecretStore) -> None:
             print("Invalid choice.")
 
 
+def _open_store() -> SecretStore:
+    """Open the encrypted secret vault (prompting for the passphrase), or
+    fall back to a RAM-only store where every unit's secret is entered per
+    session. $DRIVERPOE_VAULT points elsewhere; $DRIVERPOE_VAULT_PASSPHRASE
+    skips the prompt (less safe -- shell history / env inspection)."""
+    path = default_vault_path()
+    env_pw = os.environ.get("DRIVERPOE_VAULT_PASSPHRASE")
+
+    if path.exists():
+        pw = env_pw or getpass.getpass(f"Vault passphrase [{path}]: ")
+        try:
+            store = EncryptedFileSecretStore(path, pw)
+        except VaultLocked:
+            raise SystemExit("Wrong vault passphrase.")
+        except VaultError as e:
+            raise SystemExit(f"Vault: {e}")
+        print(f"Vault unlocked ({len(store.serials())} secret(s)).")
+        return store
+
+    print(f"No secret vault at {path}.")
+    choice = input("  [C] create one there   [Enter] RAM only (enter secrets per session): ").strip().lower()
+    if choice != "c":
+        return MemorySecretStore()
+    pw = env_pw or getpass.getpass("New vault passphrase: ")
+    if not pw:
+        raise SystemExit("Empty passphrase -- aborted.")
+    if not env_pw and getpass.getpass("Confirm passphrase: ") != pw:
+        raise SystemExit("Passphrases don't match.")
+    try:
+        store = EncryptedFileSecretStore(path, pw, create=True)
+    except VaultError as e:
+        raise SystemExit(f"Vault: {e}")
+    print(f"Vault created at {path}.")
+    return store
+
+
 def main() -> None:
     print("=== DriverPoE admin tool ===")
-    store = JsonFileSecretStore(DEFAULT_SECRETS_FILE)
+    store = _open_store()
     last_scan: list[DeviceInfo] = []
     while True:
         print()

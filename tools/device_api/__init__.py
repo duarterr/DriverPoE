@@ -8,9 +8,9 @@ package was written to satisfy.
 
 Typical use::
 
-    from device_api import AdminClient, JsonFileSecretStore, connect, discovery
+    from device_api import AdminClient, MemorySecretStore, connect, discovery
 
-    store = JsonFileSecretStore()
+    store = MemorySecretStore()  # or EncryptedFileSecretStore(path, passphrase)
     devices = discovery.broadcast_info(discovery.guess_broadcast_address())
     client, info, secret = connect(devices[0].source_ip, store)
     client.on(secret, info.serial)
@@ -41,7 +41,18 @@ from .protocol import (
     parse_dmx_config,
     serial_from_mac,
 )
-from .secrets import ADMIN_DEFAULT_SECRET, JsonFileSecretStore, MemorySecretStore, SecretStore
+from .secrets import (
+    ADMIN_DEFAULT_SECRET,
+    EncryptedFileSecretStore,
+    MemorySecretStore,
+    SecretStore,
+    VaultError,
+    VaultFormatError,
+    VaultLocked,
+    VaultMissing,
+    bootstrap_store,
+    default_vault_path,
+)
 
 __all__ = [
     "AdminClient",
@@ -62,9 +73,15 @@ __all__ = [
     "pack_dmx_config",
     "parse_dmx_config",
     "ADMIN_DEFAULT_SECRET",
-    "JsonFileSecretStore",
+    "EncryptedFileSecretStore",
     "MemorySecretStore",
     "SecretStore",
+    "VaultError",
+    "VaultFormatError",
+    "VaultLocked",
+    "VaultMissing",
+    "bootstrap_store",
+    "default_vault_path",
     "connect",
     "find_working_secret",
     "mac_from_serial",
