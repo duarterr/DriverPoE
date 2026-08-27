@@ -7,6 +7,7 @@
 #include "hv9910.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -66,13 +67,14 @@ typedef enum {
     HV_CMD_SET_DIM,
     HV_CMD_IDENTIFY,
     HV_CMD_SET_INTENT,
+    HV_CMD_FADE_TO_ZERO_DONE, /**< Internal only, posted by hv_fade_end_cb() -- never sent by post_cmd() callers. */
 } hv9910_cmd_type_t;
 
 /** @brief One queued command for hv9910_task. */
 typedef struct {
     hv9910_cmd_type_t type; /**< Command type. */
     uint32_t ramp_ms;       /**< Ramp duration, for ENABLE/DISABLE/SET_DIM. */
-    bool persist;           /**< Persist flag for ENABLE/DISABLE; desired value for SET_INTENT. */
+    bool persist;           /**< Persist flag for ENABLE/DISABLE/SET_DIM; desired value for SET_INTENT. */
     uint8_t percent;        /**< Brightness, for SET_DIM. */
 } hv9910_cmd_t;
 
@@ -82,12 +84,16 @@ static bool s_task_ready = false;
 /** @brief Deferred/multi-step action hv9910_task is waiting to fire. */
 typedef enum {
     PENDING_NONE,
-    PENDING_SHUTDOWN,      /**< Assert SHUTDOWN once a ramped-OFF's fade-to-0 finishes. */
     PENDING_IDENTIFY_STEP, /**< Advance to the next step of an in-progress IDENTIFY blink. */
 } pending_action_t;
 
 static volatile pending_action_t s_pending = PENDING_NONE;
 static TickType_t s_pending_deadline;
+
+/** @brief True while a fade-to-0 from hv_do_disable() is in flight; its completion
+ * (hv_fade_end_cb) asserts SHUTDOWN. Cleared by any other dim/enable call so a
+ * superseded fade can't fire a stale shutdown. */
+static volatile bool s_awaiting_shutdown_fade = false;
 
 static int s_identify_steps_left;
 static bool s_identify_next_is_on;
@@ -215,6 +221,25 @@ static void persist_enabled_state(bool enabled)
 }
 
 /**
+ * @brief LEDC fade-end ISR callback; posts HV_CMD_FADE_TO_ZERO_DONE if this
+ * fade is the one hv_do_disable() is waiting on.
+ * @param param Fade event info.
+ * @param user_arg Unused.
+ * @return true if a higher-priority task was woken.
+ */
+static bool IRAM_ATTR hv_fade_end_cb(const ledc_cb_param_t *param, void *user_arg)
+{
+    (void)user_arg;
+    BaseType_t woken = pdFALSE;
+    if (param->event == LEDC_FADE_END_EVT && s_awaiting_shutdown_fade) {
+        s_awaiting_shutdown_fade = false;
+        hv9910_cmd_t cmd = { .type = HV_CMD_FADE_TO_ZERO_DONE };
+        xQueueSendFromISR(s_cmd_queue, &cmd, &woken);
+    }
+    return woken == pdTRUE;
+}
+
+/**
  * @brief Configures the LEDC timer/channel and installs the fade service, once.
  * @return None.
  */
@@ -246,6 +271,9 @@ static void ledc_start_if_needed(void)
 
     ESP_ERROR_CHECK(ledc_fade_func_install(0));
 
+    ledc_cbs_t callbacks = { .fade_cb = hv_fade_end_cb };
+    ESP_ERROR_CHECK(ledc_cb_register(LEDC_SPEED_MODE, LEDC_CHANNEL, &callbacks, NULL));
+
     s_ledc_started = true;
 }
 
@@ -253,9 +281,12 @@ static void ledc_start_if_needed(void)
  * @brief Sets the LEDC duty cycle, with an optional hardware fade.
  * @param percent Brightness, 0-100.
  * @param ramp_ms Ramp duration in ms; 0 for an instant change.
+ * @param persist true to persist as the resume brightness (NVS write) if it
+ * changed; false skips that write entirely -- for a transient/cosmetic dim
+ * (effect frame, music-reactive update) that shouldn't touch flash at all.
  * @return None.
  */
-static void hv_do_set_dim(uint8_t percent, uint32_t ramp_ms)
+static void hv_do_set_dim(uint8_t percent, uint32_t ramp_ms, bool persist)
 {
     if (percent > 100) {
         percent = 100;
@@ -267,14 +298,19 @@ static void hv_do_set_dim(uint8_t percent, uint32_t ramp_ms)
     uint32_t duty = ((uint32_t)percent * LEDC_DUTY_MAX) / 100;
 
     if (ramp_ms == 0) {
+        s_awaiting_shutdown_fade = false;
         ledc_set_duty(LEDC_SPEED_MODE, LEDC_CHANNEL, duty);
         ledc_update_duty(LEDC_SPEED_MODE, LEDC_CHANNEL);
     } else {
+        // Arms/disarms hv_fade_end_cb()'s shutdown intent for this fade.
+        s_awaiting_shutdown_fade = (percent == 0);
         ledc_set_fade_with_time(LEDC_SPEED_MODE, LEDC_CHANNEL, duty, (int)ramp_ms);
         ledc_fade_start(LEDC_SPEED_MODE, LEDC_CHANNEL, LEDC_FADE_NO_WAIT);
     }
 
-    persist_last_nonzero(percent);
+    if (persist) {
+        persist_last_nonzero(percent);
+    }
 
     ESP_LOGI(TAG, "Dimming set to %u%% over %ums (duty=%u/%u)", percent, (unsigned)ramp_ms, (unsigned)duty, LEDC_DUTY_MAX);
 }
@@ -295,7 +331,7 @@ static void hv_do_enable(uint32_t ramp_ms, bool persist)
 
     shutdown_write(shutdown_run_level());
     s_enabled = true;
-    hv_do_set_dim(restore_percent, ramp_ms);
+    hv_do_set_dim(restore_percent, ramp_ms, persist);
     ESP_LOGW(TAG, "Driver ENABLED (SHUTDOWN released), ramping to %u%% over %ums%s",
              restore_percent, (unsigned)ramp_ms, persist ? "" : " (transient, not persisted)");
 }
@@ -312,16 +348,14 @@ static void hv_do_disable(uint32_t ramp_ms, bool persist)
         persist_enabled_state(false);
     }
 
-    hv_do_set_dim(0, ramp_ms);
+    hv_do_set_dim(0, ramp_ms, persist);
 
     if (ramp_ms == 0) {
         shutdown_write(shutdown_assert_level());
         s_enabled = false;
         ESP_LOGI(TAG, "Driver DISABLED (SHUTDOWN asserted)");
-    } else {
-        s_pending = PENDING_SHUTDOWN;
-        s_pending_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(ramp_ms);
     }
+    // else: SHUTDOWN fires later, from HV_CMD_FADE_TO_ZERO_DONE.
 }
 
 /**
@@ -332,7 +366,7 @@ static void do_identify_step(void)
 {
     if (s_identify_steps_left <= 0) {
         if (s_identify_saved_enabled) {
-            hv_do_set_dim(s_identify_saved_dim, 0);
+            hv_do_set_dim(s_identify_saved_dim, 0, false);
         } else {
             hv_do_disable(0, false);
         }
@@ -340,7 +374,7 @@ static void do_identify_step(void)
         return;
     }
 
-    hv_do_set_dim(s_identify_next_is_on ? 100 : 0, 0);
+    hv_do_set_dim(s_identify_next_is_on ? 100 : 0, 0, false);
     s_identify_next_is_on = !s_identify_next_is_on;
     s_identify_steps_left--;
 
@@ -381,13 +415,21 @@ static void dispatch_cmd(const hv9910_cmd_t *cmd)
         hv_do_disable(cmd->ramp_ms, cmd->persist);
         break;
     case HV_CMD_SET_DIM:
-        hv_do_set_dim(cmd->percent, cmd->ramp_ms);
+        hv_do_set_dim(cmd->percent, cmd->ramp_ms, cmd->persist);
         break;
     case HV_CMD_IDENTIFY:
         hv_do_identify();
         break;
     case HV_CMD_SET_INTENT:
         persist_enabled_state(cmd->persist);
+        break;
+    case HV_CMD_FADE_TO_ZERO_DONE:
+        // From hv_fade_end_cb(); s_enabled check is just idempotency.
+        if (s_enabled) {
+            shutdown_write(shutdown_assert_level());
+            s_enabled = false;
+            ESP_LOGI(TAG, "Driver DISABLED (SHUTDOWN asserted, after ramp)");
+        }
         break;
     }
 }
@@ -399,16 +441,6 @@ static void dispatch_cmd(const hv9910_cmd_t *cmd)
 static void fire_pending_action(void)
 {
     switch (s_pending) {
-    case PENDING_SHUTDOWN:
-        shutdown_write(shutdown_assert_level());
-        s_enabled = false;
-        if (s_ledc_started) {
-            ledc_set_duty(LEDC_SPEED_MODE, LEDC_CHANNEL, 0);
-            ledc_update_duty(LEDC_SPEED_MODE, LEDC_CHANNEL);
-        }
-        ESP_LOGI(TAG, "Driver DISABLED (SHUTDOWN asserted, after ramp)");
-        s_pending = PENDING_NONE;
-        break;
     case PENDING_IDENTIFY_STEP:
         do_identify_step();
         break;
@@ -543,9 +575,9 @@ void hv9910_emergency_disable(void)
     post_cmd(&cmd, true);
 }
 
-void hv9910_set_dim(uint8_t percent, uint32_t ramp_ms)
+void hv9910_set_dim(uint8_t percent, uint32_t ramp_ms, bool persist)
 {
-    hv9910_cmd_t cmd = { .type = HV_CMD_SET_DIM, .ramp_ms = clamp_ramp_ms(ramp_ms), .percent = percent };
+    hv9910_cmd_t cmd = { .type = HV_CMD_SET_DIM, .ramp_ms = clamp_ramp_ms(ramp_ms), .persist = persist, .percent = percent };
     post_cmd(&cmd, false);
 }
 
@@ -563,7 +595,7 @@ void hv9910_persist_intent(bool on)
 
 bool hv9910_is_ramp_pending(void)
 {
-    return s_pending != PENDING_NONE;
+    return s_pending != PENDING_NONE || s_awaiting_shutdown_fade;
 }
 
 uint8_t hv9910_get_dim_percent(void)
