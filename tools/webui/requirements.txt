@@ -1,11 +1,10 @@
 # pip install -r tools/webui/requirements.txt
 fastapi>=0.110
 uvicorn[standard]>=0.29
-# Needed by device_api.client.change_secret() (AES-256-GCM) -- the same
-# optional dependency tools/lumtool.py already needs for the same reason.
+# Needed by device_api.client.change_secret() (AES-256-GCM).
 cryptography>=42
-# Needed by FastAPI's File()/Form() (multipart/form-data parsing) -- used
-# by the OTA firmware upload endpoint.
+# Needed by FastAPI's File()/Form() (multipart/form-data parsing) -- the
+# OTA firmware upload and the keys-file upload.
 python-multipart>=0.0.9
 # Needed by /api/interfaces (the broadcast-address dropdown) -- lists local
 # network interfaces with their IPv4 address/netmask. Optional at import

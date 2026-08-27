@@ -1,10 +1,12 @@
 """Interactive command-line interface, built entirely on top of the
 device_api package -- no protocol/HMAC/socket code of its own. This is
-where every input()/print()/getpass() in this package lives; nothing
-above this module does interactive I/O.
+where every input()/print()/getpass()/open() in this package lives;
+nothing above this module does interactive or disk I/O.
 
-Preserves the discovery -> selection -> per-device-menu ->
-destructive-action-confirmation UX the original tools/lumtool.py had.
+    python -m device_api.cli [keys.txt]
+
+Flow: discovery -> pick a unit -> per-device menu, with an explicit
+confirmation on every destructive action.
 """
 from __future__ import annotations
 

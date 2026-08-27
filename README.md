@@ -32,7 +32,7 @@ Custom binary protocol over UDP, port `5001` (`ADMIN_UDP_PORT`), version `5` (`A
 
 **Security model**: each unit has a 32-byte secret (`components/devid/devid.h`), written to NVS automatically with a documented factory-default value (`ADMIN_DEFAULT_SECRET`, in `main/poe_luminaire_main.h`) on first boot — and again after any `FACTORY_RESET`, which erases the same NVS partition the secret lives in. `INFO` is the only unauthenticated command (pure read, no side effect, answered to anyone — including broadcast). Every command that changes something (`ON`/`OFF`/`DIM`/`IDENTIFY`/`REBOOT`/`FACTORY_RESET`/`CHANGE_SECRET`/`DMX_SET_CONFIG`) — and `DMX_GET_CONFIG` — requires HMAC-SHA256 with the active secret **and** a single-use nonce obtained via `CHALLENGE` immediately before, bound to the source IP and short-lived (5 s) — this protects against replaying a captured packet, not just forgery. `CHANGE_SECRET` swaps the secret directly (payload encrypted with AES-256-GCM under the current secret), with no separate confirmation step.
 
-The default secret is known (it's in this repository) — this layer's real security comes from changing it during installation, not from keeping it secret. Treat it like the default password printed on the bottom of a home router.
+The default secret is known (it's in this repository) — this layer's real security comes from changing it during installation, not from keeping it secret. Treat it like the default password printed on the bottom of a home router. The host tools never try it automatically: to reach a unit that's still on the default you put its value in your keys file (see "Per-unit admin keys" below).
 
 Each device also rate-limits incoming packets to 40 per second per source IP (`admin_channel.c`, `RATE_LIMIT_MAX_PER_WINDOW`); anything past that is silently dropped, with no response at all — indistinguishable on the wire from the packet never arriving. A client that dims or sends other write commands at a high, sustained rate (a lighting effect, a music-reactive mode) needs to stay comfortably under this, and should expect an occasional dropped update to be normal rather than a bug.
 
@@ -57,7 +57,7 @@ All DMX actuation goes through the `hv9910` driver, which keeps no NVS state —
 | Protocol | Port | Addressing |
 | --- | --- | --- |
 | Art-Net | UDP 6454 (broadcast + unicast) | 15-bit Port-Address = Net(0–127) : Sub-Net(0–15) : Universe(0–15). Answers `ArtPoll` with `ArtPollReply` (discoverable/named in consoles). Honors `ArtAddress` if `allow_artaddress` is set. |
-| sACN (E1.31) | UDP 5568 (multicast `239.255.<hi>.<lo>` + unicast) | Universe 1–63999. Honors the `priority` field (0–200) and `stream_terminated`. IGMP multicast is built into ESP-IDF's lwIP. |
+| sACN (E1.31) | UDP 5568 (multicast `239.255.<hi>.<lo>` + unicast) | Universe 1–63999. Honors the `priority` field (0–200) and `stream_terminated`. Needs `CONFIG_LWIP_IGMP` (pinned on in `sdkconfig.defaults`). |
 
 **Personalities**: 1 channel (intensity, 8-bit) or 2 channels (intensity, 16-bit — MSB then LSB). **Merge**: HTP (default) or LTP across simultaneously-active sources; the highest `priority` wins first, then the merge mode. **Signal-loss behavior**: hold last level / fade to black / fade to a set level, after a configurable timeout (default 3 s).
 
@@ -73,7 +73,7 @@ python -m dmxtool sacn --universe 1 --channel 1 --value 200
 
 ### Host tools
 
-All of the protocol/HMAC/AES-GCM/discovery logic lives in a single pure Python package, `tools/device_api/` (no `input()`/`print()`/side effects outside the network) — `tools/webui/` and `tools/webui_demo/` are consumers of that package, not parallel reimplementations of it.
+All of the protocol / HMAC / AES-GCM / discovery logic lives in a single pure Python package, `tools/device_api/` (no `input()`/`print()`, no disk I/O, no side effects outside the network) — `tools/webui/`, `tools/webui_demo/` and `tools/audit_admin.py` are consumers of it, not parallel reimplementations.
 
 **`tools/device_api/`** — Python API:
 
@@ -83,7 +83,7 @@ All of the protocol/HMAC/AES-GCM/discovery logic lives in a single pure Python p
 | `client.py` | `AdminClient` (one UDP socket per unit; `info/challenge/on/off/dim/identify/reboot/factory_reset/change_secret`, `get_dmx_config`/`set_dmx_config`, `ota_update`), typed exceptions (`DeviceTimeoutError`, `AuthError`, `ProtocolError`/`ProtocolVersionMismatchError`, `CommandRefusedError`, `MissingDependencyError`), `find_working_secret()`/`connect()`. |
 | `discovery.py` | `broadcast_info()`, `resolve_device_by_ip()`, `guess_broadcast_address()`. |
 | `models.py` | `DeviceInfo` (with `power_blocking_reason` and the `dmx_*` status fields), `CommandResult` (`accepted`/`applied`/`pending`, `raise_if_refused()`). |
-| `secrets.py` | `SecretStore` (minimal protocol: `get/set/delete`), `KeyfileSecretStore` (RAM-only, from a text file), `MemorySecretStore`, `parse_keys_file()`. |
+| `secrets.py` | `SecretStore` protocol, `KeyfileSecretStore` (RAM-only, from a text file, `candidates()` tries explicit key then each fallback), `MemorySecretStore`, `parse_keys_file()`. |
 | `cli.py` | The interactive menu (device menu "3" = DMX / Art-Net / sACN) — the only place in the package with terminal I/O. |
 
 **Per-unit admin keys** — nothing is stored anywhere. The operator supplies a plain-text keys file each session and it stays in RAM for the life of the process:
@@ -103,7 +103,8 @@ Separators: whitespace or `/ : = ,`. A `*` / `any` / `all others` line is a fall
 - `tools/audit_admin.py` reports the same verdict from the command line (`python audit_admin.py [--keys keys.txt] [ip ...]`).
 
 ```powershell
-python -c "from device_api import discovery, MemorySecretStore, connect; d=discovery.broadcast_info(discovery.guess_broadcast_address()); print(d)"
+Set-Location tools
+python -c "from device_api import discovery; print(discovery.broadcast_info(discovery.guess_broadcast_address()))"
 ```
 
 **`tools/webui/`** — local web UI (FastAPI + plain HTML/JS, no frontend framework), consuming the `device_api` package exclusively on the backend. Load a keys file (nothing is saved); a key is only ever sent to the browser once, back to the operator, right after a `CHANGE_SECRET` they themselves requested:
@@ -177,9 +178,11 @@ python -m unittest discover -s dmxtool/tests -v   # Art-Net/sACN packet wire for
 | `components/dmx_input/` | Art-Net + sACN receiver, source merge, and DMX→brightness mapping. |
 | `components/devid/` | Serial, MAC, and administrative secret. |
 | `components/status_leds/` | Board status LEDs. |
-| `tools/device_api/` | Python package: protocol, client, discovery, models, secrets, DMX config. |
-| `tools/webui/` | Local web UI (FastAPI), built on `tools/device_api/`. |
+| `tools/device_api/` | Python package: protocol, client, discovery, models, keys, DMX config. |
+| `tools/webui/` | Local admin web UI (FastAPI), built on `tools/device_api/`. |
+| `tools/webui_demo/` | Art-Net-only stage-control demo UI (no auth). |
 | `tools/dmxtool/` | Stdlib-only Art-Net/sACN test transmitter. |
+| `tools/audit_admin.py` | Reports whether each unit's admin channel is protected. |
 
 ## OTA update
 

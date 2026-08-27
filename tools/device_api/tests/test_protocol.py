@@ -110,8 +110,7 @@ class TestPacket(unittest.TestCase):
 
     def test_wrong_version_raises_specific_error(self):
         """A device speaking a different protocol version must be
-        distinguishable from ordinary corruption (TODO Fase 3: "explicit
-        protocol version mismatch handling")."""
+        distinguishable from ordinary corruption."""
         key = bytes(range(32))
         pkt = Packet(type=PacketType.ON, serial="", nonce=b"", payload=b"")
         wire = bytearray(pkt.pack(hmac_key=key))

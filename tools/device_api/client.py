@@ -2,10 +2,9 @@
 a socket. One AdminClient talks to exactly one device (by IP); see
 discovery.py for finding IPs in the first place.
 
-Every write command internally does its own CHALLENGE round trip (TODO
-Fase 2.4: every write command needs a fresh, single-use, IP-bound nonce
-now, not just REBOOT/FACTORY_RESET/CHANGE_SECRET) -- callers never handle
-nonces themselves.
+Every write command internally does its own CHALLENGE round trip for a
+fresh, single-use, IP-bound nonce -- callers never handle nonces
+themselves.
 """
 from __future__ import annotations
 

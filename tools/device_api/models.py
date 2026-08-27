@@ -67,9 +67,9 @@ class DeviceInfo:
 @dataclass(frozen=True)
 class CommandResult:
     """Outcome of one write command (ON/OFF/DIM/IDENTIFY/REBOOT/
-    FACTORY_RESET/CHANGE_SECRET). Distinguishes "accepted" from "applied"
-    (TODO Fase 2.2) -- ADMIN_STATUS_ACCEPTED_PENDING means the device
-    validated and persisted the request but couldn't apply it yet (power
+    FACTORY_RESET/CHANGE_SECRET/DMX_SET_CONFIG). Distinguishes "accepted"
+    from "applied" -- ADMIN_STATUS_ACCEPTED_PENDING means the device
+    validated and recorded the request but couldn't apply it yet (power
     not confirmed); it is NOT an error, so this never gets raised as an
     exception on its own -- see raise_if_refused()."""
     status: AdminStatus

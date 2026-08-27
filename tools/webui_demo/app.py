@@ -4,7 +4,7 @@ Run from ``tools/`` with ``python -m webui_demo.app`` and open
 http://127.0.0.1:8001.  Local-network tool.
 
 The demo drives fixtures over **Art-Net only** and does nothing
-authenticated -- no admin secret, no vault. It discovers units with an
+authenticated -- no admin key at all. It discovers units with an
 unauthenticated INFO broadcast, reads each one's DMX patch (universe /
 start address / personality / protocols) straight out of that INFO
 response, and then streams ArtDmx to them continuously (see

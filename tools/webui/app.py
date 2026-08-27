@@ -446,8 +446,7 @@ def api_factory_reset(ip: str, body: FactoryResetRequest, port: int = DEFAULT_PO
             info = client.info()
             # Explicit confirmation, mirroring the CLI's "type the exact
             # serial" prompt -- a destructive action must never fire from
-            # a single accidental click (TODO Fase 2.7: "preservar
-            # confirmação explícita do lado cliente").
+            # a single accidental click.
             if body.confirm_serial != info.serial:
                 raise HTTPException(400, f"confirm_serial must exactly match the device's serial ({info.serial})")
             secret = _resolve_secret(client, info.serial, body.secret_hex)
