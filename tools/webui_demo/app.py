@@ -38,8 +38,8 @@ _effect_name: str | None = None
 # after the first one to a given ip -- see _fast_command(). Without it, each
 # command costs up to four UDP round trips (INFO, a verifying CHALLENGE, the
 # write command's own CHALLENGE, then the write itself), which at anything
-# above a few commands/second trips the firmware's per-source rate limiter
-# (admin_channel.c: 20 packets/second/IP) and every command stalls for the
+# above ~10 commands/second trips the firmware's per-source rate limiter
+# (admin_channel.c: 40 packets/second/IP -- 2 packets/command) and every command stalls for the
 # full 3s socket timeout waiting on a response that was silently dropped --
 # the lights look "stuck", and effects can't react to /api/effects/stop until
 # whatever's in flight finishes.

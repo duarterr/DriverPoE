@@ -29,28 +29,37 @@
   }
   @keyframes drift { to { transform: scale(1.13) rotate(6deg); } }
   header {
-    padding: 16px 20px; border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
     background: var(--panel); backdrop-filter: blur(18px);
+  }
+  .header-inner {
+    max-width: 1180px; margin: 0 auto; padding: 16px 20px;
     display: flex; align-items: center; gap: 12px;
   }
   header h1 { font-size: 20px; letter-spacing: -.03em; margin: 0; flex: 1; }
-  header input, header select {
+  .shell { max-width: 1180px; margin: 0 auto; padding: 20px 20px 48px; }
+  .field {
     padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
-    background: #070a18; color: var(--fg); font: inherit; font-size: 13px;
+    background: #070a18; color: var(--fg); font: inherit; font-size: 13px; line-height: 18px;
   }
-  header button {
+  .field.grow { flex: 1; min-width: 160px; }
+  .btn-accent {
     appearance: none; padding: 8px 16px; border: 1px solid var(--violet); border-radius: 10px;
-    background: var(--violet); color: #fff; font: inherit; font-weight: 650; cursor: pointer; transition: .18s;
+    background: var(--violet); color: #fff; font: inherit; font-size: 13px; line-height: 18px;
+    font-weight: 650; cursor: pointer; transition: .18s;
   }
-  header button:hover:not(:disabled) { transform: translateY(-2px); }
-  header button:disabled { opacity: .5; cursor: default; }
-  main { padding: 20px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  .btn-accent:hover:not(:disabled) { transform: translateY(-2px); }
+  .btn-accent:disabled { opacity: .5; cursor: default; }
+  .network-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  main { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  .card.span2 { grid-column: 1 / -1; }
   .card {
     background: var(--card); border: 1px solid var(--border); border-radius: 18px;
     backdrop-filter: blur(18px); box-shadow: 0 18px 50px #0006; padding: 18px;
   }
   .card h2 { font-size: 16px; letter-spacing: -.02em; margin: 0 0 4px; padding-right: 28px; }
   .card .sub { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  .scan-status { color: var(--muted); font-size: 12px; margin: 8px 0 0; text-align: center; }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; font-size: 13px; }
   .row .label { color: var(--muted); }
   .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
@@ -126,48 +135,63 @@
   .select-check { position: absolute; top: 12px; right: 12px; width: 18px; height: 18px; cursor: pointer; accent-color: var(--hot); }
   .card { position: relative; }
 
-  .bulk-bar { display: none; background: var(--panel); backdrop-filter: blur(18px); border-bottom: 1px solid var(--border); padding: 10px 20px; }
+  .bulk-bar { display: none; }
   .bulk-bar.show { display: block; }
   .bulk-bar .bulk-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
   .bulk-bar .bulk-row:first-child { margin-top: 0; }
   .bulk-count { font-size: 13px; font-weight: 700; margin-right: 4px; color: var(--hot); }
   .bulk-bar .btn { min-width: 0; padding: 6px 12px; }
-  .bulk-dim-wrap { position: relative; flex: 1; min-width: 140px; max-width: 260px; display: flex; align-items: center; }
+  .bulk-dim-wrap { position: relative; flex: 2; min-width: 140px; display: flex; align-items: center; }
   .bulk-dim-wrap input[type=range] { width: 100%; accent-color: var(--hot); }
+  .bulk-bar .bulk-count { margin-left: auto; }
 </style>
 </head>
 <body>
 <header>
-  <h1>DriverPoE</h1>
-  <select id="bcastSelect" onchange="applyBcastSelection(this)">
-    <option value="">Interface...</option>
-  </select>
-  <input id="bcast" type="text" placeholder="broadcast (auto)" size="16">
-  <button id="scanBtn" onclick="scanDevices()">Scan network</button>
+  <div class="header-inner"><h1>DriverPoE</h1></div>
 </header>
 
-<div class="bulk-bar" id="bulkBar">
-  <div class="bulk-row">
-    <span class="bulk-count" id="bulkCount">0 selected</span>
-    <button class="btn" onclick="bulkOn()">On</button>
-    <button class="btn" onclick="bulkOff()">Off</button>
-    <button class="btn" onclick="bulkIdentify()">Identify</button>
-    <button class="btn" onclick="bulkStatus()">Get status</button>
-    <div class="bulk-dim-wrap">
-      <span class="dim-tip" id="bulk-dim-tip">50%</span>
-      <input type="range" id="bulkDimSlider" min="0" max="100" step="1" value="50"
-             oninput="bulkDimInput(this)" onchange="bulkDimCommit(this)">
-    </div>
-    <button class="btn" onclick="clearSelection()">Clear selection</button>
-  </div>
-  <div class="bulk-row">
-    <button class="btn btn-danger" onclick="bulkReboot()">Reboot</button>
-    <button class="btn btn-danger" onclick="bulkFactoryReset()">Factory reset</button>
-    <button class="btn btn-danger" onclick="bulkChangeSecret()">Change secret</button>
-  </div>
-</div>
+<div class="shell">
+<main class="grid" id="content">
 
-<main id="devices"><div class="empty">Click "Scan network" to discover luminaires on this LAN.</div></main>
+  <section class="card span2" id="networkCard">
+    <h2>Network</h2>
+    <div class="network-row">
+      <select id="bcastSelect" class="field" onchange="applyBcastSelection(this)">
+        <option value="">Interface...</option>
+      </select>
+      <input id="bcast" class="field grow" type="text" placeholder="broadcast (auto)">
+      <button class="btn-accent" id="scanBtn" onclick="scanDevices()">Scan network</button>
+    </div>
+    <div class="scan-status" id="scanStatus">Click "Scan network" to discover luminaires on this LAN.</div>
+  </section>
+
+  <section class="card span2 bulk-bar" id="bulkBar">
+    <h2>Multiple devices</h2>
+    <div class="bulk-row">
+      <button class="btn" onclick="bulkOn()">On</button>
+      <button class="btn" onclick="bulkOff()">Off</button>
+      <button class="btn" onclick="bulkIdentify()">Identify</button>
+      <button class="btn" onclick="bulkStatus()">Get status</button>
+      <div class="bulk-dim-wrap">
+        <span class="dim-tip" id="bulk-dim-tip">50%</span>
+        <input type="range" id="bulkDimSlider" min="0" max="100" step="1" value="50"
+               oninput="bulkDimInput(this)" onchange="bulkDimCommit(this)">
+      </div>
+      <button class="btn" onclick="clearSelection()">Clear selection</button>
+      <span class="bulk-count" id="bulkCount">0 selected</span>
+    </div>
+    <div class="bulk-row">
+      <button class="btn btn-danger btn-fill" onclick="bulkReboot()">Reboot</button>
+      <button class="btn btn-danger btn-fill" onclick="bulkFactoryReset()">Factory reset</button>
+      <button class="btn btn-danger btn-fill" onclick="bulkChangeSecret()">Change key</button>
+    </div>
+  </section>
+
+  <div id="devices" style="display:contents"></div>
+
+</main>
+</div>
 
 <dialog id="secretDialog">
   <form method="dialog" onsubmit="return false">
@@ -284,7 +308,7 @@ function renderDevices() {
         <div class="controls-row">
           <button class="btn btn-danger btn-fill" onclick="cmd(${i},'reboot')">Reboot</button>
           <button class="btn btn-danger btn-fill" onclick="factoryReset(${i})">Factory reset</button>
-          <button class="btn btn-danger btn-fill" onclick="changeSecret(${i})">Change secret</button>
+          <button class="btn btn-danger btn-fill" onclick="changeSecret(${i})">Change key</button>
         </div>
       </div>
 
@@ -405,18 +429,27 @@ async function bulkChangeSecret() {
 
 async function scanDevices() {
   const btn = document.getElementById('scanBtn');
+  const status = document.getElementById('scanStatus');
   btn.disabled = true;
   btn.textContent = 'Scanning...';
+  status.textContent = 'Scanning network…';
   try {
     const bcast = document.getElementById('bcast').value.trim();
     const url = '/api/scan' + (bcast ? `?broadcast=${encodeURIComponent(bcast)}` : '');
     const resp = await fetch(url);
     const data = await resp.json();
     devices = data.devices || [];
-    selectedIndices.clear(); // indices are only meaningful within one scan's result set
+    // indices are only meaningful within one scan's result set -- default
+    // to "everything just found" selected, since bulk actions are the
+    // common next step right after a scan.
+    selectedIndices = new Set(devices.map((_, i) => i));
     renderDevices();
+    status.textContent = devices.length
+      ? `${devices.length} luminaire${devices.length === 1 ? '' : 's'} found.`
+      : 'No unit responded. Try again, or check the broadcast address.';
   } catch (e) {
     document.getElementById('devices').innerHTML = `<div class="empty">Scan failed: ${e}</div>`;
+    status.textContent = 'Scan failed.';
   } finally {
     btn.disabled = false;
     btn.textContent = 'Scan network';

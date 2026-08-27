@@ -48,7 +48,7 @@ static admin_channel_config_t s_config;
 
 #define RATE_LIMIT_TABLE_SIZE     16
 #define RATE_LIMIT_WINDOW_US      (1 * 1000000LL)
-#define RATE_LIMIT_MAX_PER_WINDOW 20
+#define RATE_LIMIT_MAX_PER_WINDOW 40
 
 #define OTA_IDLE_TIMEOUT_US       (30 * 1000000LL)
 
