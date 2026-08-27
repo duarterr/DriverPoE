@@ -1,11 +1,11 @@
-"""Tests for driverpoe.models -- no network involved."""
+"""Tests for device_api.models -- no network involved."""
 from __future__ import annotations
 
 import unittest
 
-from driverpoe.client import CommandRefusedError
-from driverpoe.models import CommandResult, DeviceInfo
-from driverpoe.protocol import AdminStatus
+from device_api.client import CommandRefusedError
+from device_api.models import CommandResult, DeviceInfo
+from device_api.protocol import AdminStatus
 
 
 def _info(**overrides) -> DeviceInfo:

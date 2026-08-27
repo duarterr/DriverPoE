@@ -1,4 +1,4 @@
-"""Tests for driverpoe.protocol -- pure serialization, no sockets."""
+"""Tests for device_api.protocol -- pure serialization, no sockets."""
 from __future__ import annotations
 
 import hashlib
@@ -6,7 +6,7 @@ import hmac
 import struct
 import unittest
 
-from driverpoe.protocol import (
+from device_api.protocol import (
     HEADER_SIZE,
     HMAC_LEN,
     AdminStatus,

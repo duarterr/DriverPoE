@@ -1,6 +1,6 @@
 """DriverPoE local web UI -- FastAPI backend.
 
-Built entirely on top of the `driverpoe` package (../driverpoe/) -- no
+Built entirely on top of the `device_api` package (../device_api/) -- no
 protocol/HMAC/AES-GCM logic of its own, and the admin secret never leaves
 this process: the browser only ever sends a secret it wants tried
 (optional, only needed the first time a unit is talked to, or after a
@@ -38,8 +38,8 @@ try:
 except ImportError:  # only needed for /api/interfaces (the broadcast-address dropdown)
     psutil = None
 
-from driverpoe import discovery
-from driverpoe.client import (
+from device_api import discovery
+from device_api.client import (
     AdminClient,
     AuthError,
     CommandRefusedError,
@@ -49,9 +49,9 @@ from driverpoe.client import (
     OtaTransferError,
     find_working_secret,
 )
-from driverpoe.models import CommandResult, DeviceInfo
-from driverpoe.protocol import DEFAULT_PORT, DEFAULT_RAMP_MS, DEFAULT_TIMEOUT, SECRET_LEN, ProtocolVersionMismatchError
-from driverpoe.secrets import DEFAULT_SECRETS_FILE, JsonFileSecretStore
+from device_api.models import CommandResult, DeviceInfo
+from device_api.protocol import DEFAULT_PORT, DEFAULT_RAMP_MS, DEFAULT_TIMEOUT, SECRET_LEN, ProtocolVersionMismatchError
+from device_api.secrets import DEFAULT_SECRETS_FILE, JsonFileSecretStore
 
 app = FastAPI(title="DriverPoE", description="Local admin UI for DriverPoE luminaires")
 
@@ -166,7 +166,7 @@ def _error_response(e: Exception) -> JSONResponse:
     if isinstance(e, OtaTransferError):
         return JSONResponse(status_code=409, content={"error": "ota_transfer_failed", "message": str(e)})
     if isinstance(e, DriverPoEError):
-        return JSONResponse(status_code=400, content={"error": "driverpoe_error", "message": str(e)})
+        return JSONResponse(status_code=400, content={"error": "device_api_error", "message": str(e)})
     raise e
 
 
@@ -385,7 +385,7 @@ def api_change_secret(ip: str, body: ChangeSecretRequest, port: int = DEFAULT_PO
 @app.post("/api/devices/{ip}/ota/upload")
 def api_ota_upload(ip: str, file: bytes = File(...), secret_hex: str | None = Form(None), port: int = DEFAULT_PORT):
     """Pushes `file`'s bytes to the device as a new firmware image and
-    stages it (does NOT reboot -- see driverpoe.client.AdminClient.
+    stages it (does NOT reboot -- see device_api.client.AdminClient.
     ota_update()'s docstring). A plain `def` (not `async def`) on purpose:
     FastAPI runs synchronous routes in a worker thread automatically, so
     this potentially multi-second blocking UDP transfer never stalls the

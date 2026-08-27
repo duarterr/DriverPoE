@@ -1,5 +1,5 @@
 """Interactive command-line interface, built entirely on top of the
-driverpoe package -- no protocol/HMAC/socket code of its own. This is
+device_api package -- no protocol/HMAC/socket code of its own. This is
 where every input()/print()/getpass() in this package lives; nothing
 above this module does interactive I/O.
 

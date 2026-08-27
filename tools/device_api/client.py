@@ -168,11 +168,19 @@ class AdminClient:
         payload = ramp_ms.to_bytes(4, "big")
         return self._write_command("OFF", PacketType.OFF, PacketType.OFF_RESP, serial, key, nonce, payload)
 
-    def dim(self, key: bytes, serial: str, percent: int, ramp_ms: int = DEFAULT_RAMP_MS) -> CommandResult:
+    def dim(self, key: bytes, serial: str, percent: int, ramp_ms: int = DEFAULT_RAMP_MS,
+            persist: bool = True) -> CommandResult:
+        """persist=False marks this as a transient/cosmetic dim (an effect frame,
+        a music-reactive update) -- the device skips writing it to NVS as the
+        resume brightness. Appends a 6th payload byte only for this case, so a
+        plain 5-byte payload (persist=True, the default) still matches what
+        older firmware expects."""
         if not 0 <= percent <= 100:
             raise ValueError(f"percent must be 0-100, got {percent}")
         nonce = self.challenge(key, serial)
         payload = bytes([percent]) + ramp_ms.to_bytes(4, "big")
+        if not persist:
+            payload += bytes([0x01])
         return self._write_command("DIM", PacketType.DIM, PacketType.DIM_RESP, serial, key, nonce, payload)
 
     def identify(self, key: bytes, serial: str) -> CommandResult:

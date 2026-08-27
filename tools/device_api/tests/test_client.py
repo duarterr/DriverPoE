@@ -1,4 +1,4 @@
-"""Tests for driverpoe.client -- exercised against a minimal in-process
+"""Tests for device_api.client -- exercised against a minimal in-process
 fake "device" (a real UDP socket on 127.0.0.1, not a mock) so the tests
 cover the actual wire round trip, not just mocked-out method calls.
 """
@@ -10,15 +10,15 @@ import struct
 import threading
 import unittest
 
-from driverpoe.client import (
+from device_api.client import (
     AdminClient,
     AuthError,
     DeviceTimeoutError,
     connect,
     find_working_secret,
 )
-from driverpoe.models import CommandResult
-from driverpoe.protocol import (
+from device_api.models import CommandResult
+from device_api.protocol import (
     HEADER_SIZE,
     AdminStatus,
     Packet,
@@ -26,7 +26,7 @@ from driverpoe.protocol import (
     ProtocolError,
     ProtocolVersionMismatchError,
 )
-from driverpoe.secrets import ADMIN_DEFAULT_SECRET, SECRET_LEN, MemorySecretStore
+from device_api.secrets import ADMIN_DEFAULT_SECRET, SECRET_LEN, MemorySecretStore
 
 try:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -274,7 +274,7 @@ class TestAdminClientChallengeAndWrites(unittest.TestCase):
         self.assertFalse(result.applied)
 
     def test_raise_if_refused_raises_command_refused_error(self):
-        from driverpoe.client import CommandRefusedError
+        from device_api.client import CommandRefusedError
         with FakeDevice() as device:
             device.next_status = AdminStatus.ERR_NOT_READY
             with AdminClient("127.0.0.1", device.port, timeout=1.0) as client:
@@ -388,7 +388,7 @@ class TestOtaUpdate(unittest.TestCase):
                     client.ota_update(SECRET, SERIAL, b"")
 
     def test_busy_raises_ota_transfer_error(self):
-        from driverpoe.client import OtaTransferError
+        from device_api.client import OtaTransferError
         with FakeDevice() as device:
             device.ota_begin_status = AdminStatus.ERR_BUSY
             with AdminClient("127.0.0.1", device.port, timeout=1.0) as client:
