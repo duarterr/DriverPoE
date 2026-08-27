@@ -1,0 +1,10 @@
+# Same runtime dependencies as tools/webui.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+cryptography>=42
+# For audio_reactive.py's mel-filterbank/spectral-flux analysis (React to
+# sound). librosa is NOT required -- the browser decodes the audio file
+# itself and posts raw PCM samples, so load_audio()'s librosa import is only
+# hit if something calls it directly.
+numpy>=1.24
+scipy>=1.10
