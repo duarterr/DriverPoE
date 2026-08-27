@@ -49,7 +49,7 @@ OTA_SHA256_LEN = 32
 
 ZERO_NONCE = b"\x00" * NONCE_LEN
 
-INFO_RESP_PAYLOAD_SIZE = 60       # 48-byte core block + 12-byte DMX status block
+INFO_RESP_PAYLOAD_SIZE = 64       # 48-byte core block + 16-byte DMX status block
 
 # DMX layer config wire format -- must match DMX_CFG_WIRE_SIZE /
 # dmx_config_pack() in components/dmx_input/include/dmx_input.h. 18 bytes:
@@ -285,8 +285,8 @@ def parse_info_payload(payload: bytes) -> dict:
         "led_voltage_mv": led_voltage_mv,
     }
 
-    # DMX layer status block (payload[48:60]).
-    b = payload[48:60]
+    # DMX layer status block (payload[48:64]).
+    b = payload[48:64]
     out.update({
         "dmx_layer_enabled": bool(b[0]),
         "dmx_active_source": DMX_SOURCE_NAMES.get(b[1], str(b[1])),
@@ -295,6 +295,9 @@ def parse_info_payload(payload: bytes) -> dict:
         "dmx_artnet_port_address": struct.unpack(">H", b[4:6])[0],
         "dmx_sacn_universe": struct.unpack(">H", b[6:8])[0],
         "dmx_last_src_ip": ".".join(str(x) for x in b[8:12]),
+        "dmx_address": struct.unpack(">H", b[12:14])[0],
+        "dmx_personality": b[14],
+        "dmx_proto_mask": b[15],
     })
     return out
 

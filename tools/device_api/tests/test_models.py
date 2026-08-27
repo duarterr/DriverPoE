@@ -35,6 +35,9 @@ def _info(**overrides) -> DeviceInfo:
         dmx_artnet_port_address=0,
         dmx_sacn_universe=1,
         dmx_last_src_ip="0.0.0.0",
+        dmx_address=1,
+        dmx_personality=0,
+        dmx_proto_mask=3,
     )
     fields.update(overrides)
     return DeviceInfo(**fields)

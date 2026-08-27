@@ -440,6 +440,11 @@ static void merge_tick(void)
         xSemaphoreTake(s_cfg_lock, portMAX_DELAY);
         s_status.active_source = DMX_SOURCE_NONE;
         s_status.layer_enabled = cfg.layer_enabled;
+        s_status.artnet_port_address = cfg.artnet_port_address;
+        s_status.sacn_universe = cfg.sacn_universe;
+        s_status.dmx_address = cfg.dmx_address;
+        s_status.personality = cfg.personality;
+        s_status.proto_mask = cfg.proto_mask;
         xSemaphoreGive(s_cfg_lock);
         return;
     }
@@ -495,6 +500,9 @@ static void merge_tick(void)
     s_status.merged_level_pct = (s_last_applied_pct >= 0) ? (uint8_t)s_last_applied_pct : pct;
     s_status.artnet_port_address = cfg.artnet_port_address;
     s_status.sacn_universe = cfg.sacn_universe;
+    s_status.dmx_address = cfg.dmx_address;
+    s_status.personality = cfg.personality;
+    s_status.proto_mask = cfg.proto_mask;
     for (int i = 0; i < MAX_SOURCES; i++) {
         if (s_sources[i].in_use) {
             s_status.last_src_ip = s_sources[i].src_ip;

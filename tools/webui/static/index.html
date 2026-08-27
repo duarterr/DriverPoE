@@ -407,10 +407,15 @@ function dmxCfgRows(ip, d) {
   if (cfg === undefined) { loadDmxCfg(ip); return row('Config', '<span class="label">loading…</span>'); }
   if (cfg === 'loading') return row('Config', '<span class="label">loading…</span>');
   if (cfg === 'unavailable') {
-    // Fall back to what INFO alone tells us.
-    return row('Art-Net port-address', `0x${(d.dmx_artnet_port_address ?? 0).toString(16).padStart(4,'0')} (${artnetParts(d.dmx_artnet_port_address ?? 0)})`)
+    // Fall back to the patch fields INFO carries unauthenticated.
+    const pm = d.dmx_proto_mask ?? 0;
+    const protos = [pm & 1 && 'Art-Net', pm & 2 && 'sACN'].filter(Boolean).join(' + ') || 'none';
+    return row('Protocols', protos)
+         + row('Art-Net universe', `${artnetParts(d.dmx_artnet_port_address ?? 0)} (0x${(d.dmx_artnet_port_address ?? 0).toString(16).padStart(4,'0')})`)
          + row('sACN universe', `${d.dmx_sacn_universe ?? 0}`)
-         + row('Config', '<span class="label">open "DMX settings" (secret needed)</span>');
+         + row('DMX start address', `${d.dmx_address ?? '-'}`)
+         + row('Personality', DMX_PERSONALITY[d.dmx_personality] ?? '-')
+         + row('Policy', '<span class="label">open "DMX settings" (merge / signal-loss)</span>');
   }
   const protos = [];
   if (cfg.proto_mask & 1) protos.push('Art-Net');

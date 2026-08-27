@@ -46,8 +46,10 @@ def _info_payload() -> bytes:
     buf += bytes([1, 1, 1, 1, 1, 1, 1, 1, 50, 0])      # reset_reason..ramp_pending
     buf += struct.pack(">I", 48000)                    # vbus_mv
     buf += struct.pack(">i", 3300)                      # led_voltage_mv
-    # DMX status block: disabled, no source, level 0, 0 fps, universe 0/1, no ip
+    # DMX status block (16 B): disabled, no source, level 0, 0 fps,
+    # universe 0 / sACN 1, no ip, address 1, personality 0, protos 3
     buf += bytes([0, 0, 0, 0]) + struct.pack(">H", 0) + struct.pack(">H", 1) + bytes(4)
+    buf += struct.pack(">H", 1) + bytes([0, 3])
     return bytes(buf)
 
 

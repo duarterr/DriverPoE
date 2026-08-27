@@ -402,7 +402,7 @@ static void handle_info(int sock, const parsed_header_t *hdr, const struct socka
 
     vTaskDelay(pdMS_TO_TICKS(esp_random() % 50));
 
-    uint8_t payload[64];
+    uint8_t payload[72];
     size_t off = 0;
 
     memcpy(payload + off, devid_get_mac(), DEVID_MAC_LEN); off += DEVID_MAC_LEN;
@@ -436,9 +436,9 @@ static void handle_info(int sock, const parsed_header_t *hdr, const struct socka
     voltage_sense_read(&v);
     put_u32_be(payload + off, (uint32_t)v.led_voltage_mv); off += 4;
 
-    /* --- DMX layer status block: 12 bytes appended after the original 48.
-     * Length-additive on purpose (protocol version stays 4) -- a reader
-     * that only knows the 48-byte layout takes those and ignores the tail. --- */
+    /* --- DMX layer status block: 16 bytes appended after the original 48
+     * (payload = 64). Carries everything the unauthenticated demo UI needs
+     * to build Art-Net frames without ever reading DMX_GET_CONFIG. --- */
     dmx_input_status_t dmx = {0};
     dmx_input_get_status(&dmx);
     payload[off++] = dmx.layer_enabled ? 1 : 0;
@@ -448,6 +448,9 @@ static void handle_info(int sock, const parsed_header_t *hdr, const struct socka
     put_u16_be(payload + off, dmx.artnet_port_address); off += 2;
     put_u16_be(payload + off, dmx.sacn_universe); off += 2;
     put_u32_be(payload + off, dmx.last_src_ip); off += 4;
+    put_u16_be(payload + off, dmx.dmx_address); off += 2;
+    payload[off++] = dmx.personality;
+    payload[off++] = dmx.proto_mask;
 
     send_packet(sock, src, ADMIN_TYPE_INFO_RESP, NULL, payload, (uint16_t)off, NULL);
 }

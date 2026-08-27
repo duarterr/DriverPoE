@@ -39,6 +39,9 @@ class DeviceInfo:
     dmx_artnet_port_address: int
     dmx_sacn_universe: int
     dmx_last_src_ip: str
+    dmx_address: int                 # DMX start channel, 1..512
+    dmx_personality: int             # 0 = 1ch 8-bit, 1 = 2ch 16-bit
+    dmx_proto_mask: int              # DMX_PROTO_ARTNET | DMX_PROTO_SACN
 
     @property
     def mac_str(self) -> str:
