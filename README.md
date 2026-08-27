@@ -95,10 +95,10 @@ A1B2C3D4E5F6             0011223344556677889900aabbccddeeff00112233445566778899a
 all others              ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 ```
 
-Separators: whitespace or `/ : = ,`. Fallback tokens (`*`, `any`, `all others`, ...) set the key tried for serials not listed — so the operator's own key covers a whole rig and even the factory default doesn't need to be in the file. `CHANGE_SECRET`'s new key is kept in RAM for the rest of the session and shown once to the operator; save it into your file yourself.
+Separators: whitespace or `/ : = ,`. Fallback tokens (`*`, `any`, `all others`, ...) set the key tried for serials not listed — so one operator key can cover a whole rig. **The compiled-in factory default is never tried on its own**: if your units are still on it, put that value (`b"DriverPoE-default-admin-secret!!"`.hex()) in the file as `all others`. `CHANGE_SECRET`'s new key is kept in RAM for the rest of the session and shown once to the operator; save it into your file yourself.
 
 - **CLI**: `python -m device_api.cli path/to/keys.txt` (or `$DRIVERPOE_KEYS`); with no file it prompts for a secret per unit.
-- **Web UI**: a **"Keys file"** button next to *Scan*; each card then shows an **Admin auth** pill — `authenticated` (a real key works), `factory default` (only the compiled-in default works — the unit is *not* protected), or `no key`.
+- **Web UI**: a **"Keys file"** button next to *Scan*; each card then shows an **Admin auth** pill — `authenticated` (a key from your file works), `factory default` (the working key *is* the public default value — the unit is *not* protected), or `no key`.
 - `tools/audit_admin.py` reports the same verdict from the command line (`python audit_admin.py [--keys keys.txt] [ip ...]`).
 
 ```powershell

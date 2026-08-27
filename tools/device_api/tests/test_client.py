@@ -302,11 +302,14 @@ class TestFindWorkingSecret(unittest.TestCase):
         self.assertEqual(secret, SECRET)
         self.assertEqual(len(nonce), 16)
 
-    def test_falls_back_to_factory_default(self):
+    def test_factory_default_is_not_tried_automatically(self):
+        # The compiled-in default only works if the operator put it in the store.
         with FakeDevice(secret=ADMIN_DEFAULT_SECRET) as device:
-            store = MemorySecretStore()  # nothing saved
-            with AdminClient("127.0.0.1", device.port, timeout=1.0) as client:
-                secret, _nonce = find_working_secret(client, SERIAL, store)
+            with AdminClient("127.0.0.1", device.port, timeout=0.4) as client:
+                with self.assertRaises(AuthError):
+                    find_working_secret(client, SERIAL, MemorySecretStore())
+                secret, _ = find_working_secret(
+                    client, SERIAL, MemorySecretStore({SERIAL: ADMIN_DEFAULT_SECRET}))
         self.assertEqual(secret, ADMIN_DEFAULT_SECRET)
 
     def test_prompts_manually_as_last_resort(self):

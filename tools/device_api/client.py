@@ -33,7 +33,7 @@ from .protocol import (
     parse_info_payload,
     status_byte,
 )
-from .secrets import ADMIN_DEFAULT_SECRET, SecretStore
+from .secrets import SecretStore
 
 try:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -333,42 +333,30 @@ class AdminClient:
 
 def find_working_secret(client: AdminClient, serial: str, store: SecretStore,
                          manual_secret_provider=None) -> tuple[bytes, bytes]:
-    """Returns (secret, nonce). Tries, in order: a secret saved in `store`
-    for this serial, the documented factory default, then -- only if
-    `manual_secret_provider` is given -- calls it (no args, returns
-    SECRET_LEN bytes) to get one from the caller and validates it. This
-    function itself never does I/O beyond the network (no input()/print())
-    -- prompting the operator, if wanted, is entirely the caller's
-    responsibility via manual_secret_provider (see cli.py for a getpass-
-    based one)."""
-    candidates = []
+    """Returns (secret, nonce). Tries the key `store` has for this serial
+    (KeyfileSecretStore also returns its "all others" fallback here), then
+    -- only if `manual_secret_provider` is given -- calls it (no args,
+    returns SECRET_LEN bytes) for one from the caller.
+
+    The compiled-in factory default is NOT tried automatically: if you
+    want default-secret units to work, put that value in your keys file
+    (as an explicit serial or as "all others"). This function never does
+    I/O beyond the network -- prompting the operator is the caller's job
+    via manual_secret_provider (see cli.py for a getpass-based one)."""
+    last_error: Exception | None = None
     stored = store.get(serial)
     if stored is not None:
-        candidates.append(stored)
-    if ADMIN_DEFAULT_SECRET not in candidates:
-        candidates.append(ADMIN_DEFAULT_SECRET)
-
-    last_error: Exception | None = None
-    for secret in candidates:
         try:
-            nonce = client.challenge(secret, serial)
-            return secret, nonce
+            return stored, client.challenge(stored, serial)
         except (AuthError, DeviceTimeoutError) as e:
             # A wrong secret and an unreachable device look IDENTICAL on
             # the wire here, by design: the firmware silently drops any
-            # packet whose HMAC doesn't verify (see
-            # components/admin_channel/admin_channel.c's file-top comment,
-            # "anti-oracle") instead of sending back an authenticated
-            # rejection -- so a wrong CHALLENGE never gets a CHALLENGE_RESP
-            # at all, it just times out, indistinguishable here from the
-            # device being offline. Treating DeviceTimeoutError the same
-            # as AuthError while trying candidates is what makes falling
-            # back from a stale stored secret to the factory default (or
-            # to a manually typed one) actually work -- without this, one
-            # wrong candidate would abort the whole lookup instead of
-            # trying the next one.
+            # packet whose HMAC doesn't verify (anti-oracle) instead of
+            # sending back an authenticated rejection -- so a wrong
+            # CHALLENGE just times out. Treating that the same as
+            # AuthError lets a stale keys-file entry fall through to the
+            # manually-typed secret instead of aborting the lookup.
             last_error = e
-            continue
 
     if manual_secret_provider is None:
         raise AuthError(f"No working admin secret found for {serial} (or the device is unreachable)") from last_error
