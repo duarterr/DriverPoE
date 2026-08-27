@@ -178,7 +178,7 @@
       <button class="btn-accent" id="scanBtn" onclick="scanDevices()">Scan network</button>
     </div>
     <div class="scan-status" id="scanStatus">Load a keys file, then scan the LAN.</div>
-    <div class="scan-status" id="keysStatus" style="margin-top:4px">No keys loaded — commands will only reach units still on the factory default.</div>
+    <div class="scan-status" id="keysStatus" style="margin-top:4px">No keys loaded — no unit can be commanded. Load a keys file first.</div>
   </section>
 
   <section class="card span2 bulk-bar" id="bulkBar">
@@ -326,7 +326,7 @@ function renderKeysStatus(k) {
     clear.onclick = async (e) => { e.preventDefault(); await postJson('/api/keys/clear'); checkKeys(); };
     el.appendChild(clear);
   } else {
-    el.textContent = 'No keys loaded — commands will only reach units still on the factory default.';
+    el.textContent = 'No keys loaded — no unit can be commanded. Load a keys file first.';
   }
 }
 
