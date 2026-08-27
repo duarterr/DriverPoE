@@ -73,8 +73,9 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 
-# Per-unit admin secrets lumtool.py has changed away from the factory
-# default -- plaintext, never commit this, see tools/lumtool.py
+# Per-unit admin secrets tools/webui/ and tools/webui_demo/ persist locally
+# (device_api.secrets.JsonFileSecretStore) once a device's secret has been
+# changed away from the factory default -- plaintext, never commit this.
 tools/admin_secrets.json
 
 # User-specific configuration files

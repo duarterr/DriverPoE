@@ -1,4 +1,4 @@
-"""driverpoe -- Python API for the DriverPoE admin UDP channel.
+"""device_api -- Python API for the DriverPoE admin UDP channel.
 
 Pure library, no interactive I/O: tools/lumtool.py (CLI) and
 tools/webui/ (FastAPI) are both thin consumers of this package, not the
@@ -8,7 +8,7 @@ package was written to satisfy.
 
 Typical use::
 
-    from driverpoe import AdminClient, JsonFileSecretStore, connect, discovery
+    from device_api import AdminClient, JsonFileSecretStore, connect, discovery
 
     store = JsonFileSecretStore()
     devices = discovery.broadcast_info(discovery.guess_broadcast_address())

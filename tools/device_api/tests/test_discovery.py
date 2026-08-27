@@ -1,11 +1,11 @@
-"""Tests for driverpoe.discovery."""
+"""Tests for device_api.discovery."""
 from __future__ import annotations
 
 import socket
 import unittest
 
-from driverpoe.discovery import broadcast_info, resolve_device_by_ip
-from driverpoe.tests.test_client import SERIAL, FakeDevice
+from device_api.discovery import broadcast_info, resolve_device_by_ip
+from device_api.tests.test_client import SERIAL, FakeDevice
 
 
 class TestResolveDeviceByIp(unittest.TestCase):

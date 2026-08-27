@@ -1,11 +1,11 @@
-"""Tests for driverpoe.secrets -- no network involved."""
+"""Tests for device_api.secrets -- no network involved."""
 from __future__ import annotations
 
 import tempfile
 import unittest
 from pathlib import Path
 
-from driverpoe.secrets import ADMIN_DEFAULT_SECRET, SECRET_LEN, JsonFileSecretStore, MemorySecretStore
+from device_api.secrets import ADMIN_DEFAULT_SECRET, SECRET_LEN, JsonFileSecretStore, MemorySecretStore
 
 
 class TestAdminDefaultSecret(unittest.TestCase):
