@@ -3,17 +3,13 @@
 # CONFIG_ESPTOOLPY_FLASHSIZE_4MB + CONFIG_PARTITION_TABLE_CUSTOM).
 #
 # Two OTA app slots (ota_0/ota_1) + otadata instead of a single "factory"
-# image, so a future update mechanism can write the new image to the
-# INACTIVE slot and only switch esp_ota_set_boot_partition() over to it
-# once that write verifies -- the currently-running image is never
-# overwritten in place. No actual update-writing logic is implemented yet
-# (no esp_https_ota/esp_ota_begin+write+end calls anywhere in this
-# firmware) -- this is only the partition/Kconfig structure a future OTA
-# client needs, see README.md ("Atualização OTA") and sdkconfig.defaults
-# (CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE). The other half of the rollback
-# contract -- confirming a booted image so the bootloader stops treating
-# it as "pending verify" -- IS implemented: see
-# confirm_app_if_pending_verify() in main/poe_luminaire_main.c.
+# image: an OTA writes the new image into the INACTIVE slot and only
+# switches esp_ota_set_boot_partition() over once it verifies, so the
+# running image is never overwritten in place. OTA is implemented over the
+# admin channel (components/admin_channel/, ADMIN_TYPE_OTA_*); the rollback
+# half of the contract is confirm_app_if_pending_verify() in
+# main/poe_luminaire_main.c + CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE. See
+# README.md "OTA update".
 #
 # "nvs" holds two product-owned NVS namespaces: the admin channel's secret
 # (namespace "devid", key "secret" -- see components/devid/devid.c) and the
@@ -23,20 +19,13 @@
 # the admin secret to the compiled-in factory default (devid_init()
 # rewrites it automatically on the next boot) and the DMX config to its
 # disabled default. hv9910 does NOT use NVS: the LED always boots off and
-# its level comes from the network. The serial is NOT stored here (or anywhere) -- it's
-# recomputed from the MAC at every boot, see devid.c. Sized at 0x14000
-# (kept from an earlier design that also budgeted room for a since-removed
-# Matter integration's fabric table here) -- comfortably larger than the
-# two namespaces above actually need; the extra headroom costs nothing
-# that wasn't already lost to alignment padding (app-type partitions must
-# start on a 64KB-aligned offset).
-#
-# Sizing: each app slot is ~1.88MB (0x1E0000) -- generous headroom left
-# over from when this product briefly carried a Matter/esp-matter
-# integration (removed; the actual firmware image is a few hundred KB).
-# No need to shrink these now -- unused app-partition space just sits
-# idle, and keeping the slots this size leaves plenty of room for this
-# firmware to grow before the partition table needs revisiting.
+# its level comes from the network. The serial is NOT stored here (or
+# anywhere) -- it's recomputed from the MAC at every boot, see devid.c.
+# nvs is 0x14000, far larger than the two small namespaces need; app slots
+# are ~1.88MB (0x1E0000) each, far larger than the few-hundred-KB image.
+# Both are oversized headroom left from an earlier (since-removed) Matter
+# integration; no reason to shrink them -- idle flash costs nothing and
+# leaves room to grow.
 nvs,      data, nvs,     0x9000,   0x14000,
 phy_init, data, phy,     0x1d000,  0x1000,
 otadata,  data, ota,     0x1e000,  0x2000,

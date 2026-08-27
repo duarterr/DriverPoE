@@ -1,16 +1,15 @@
 """device_api -- Python API for the DriverPoE admin UDP channel.
 
-Pure library, no interactive I/O: tools/lumtool.py (CLI) and
-tools/webui/ (FastAPI) are both thin consumers of this package, not the
-other way around. See README.md "Canal de administração" for the wire
-protocol this implements, and TODO for the Fase 3 requirements this
-package was written to satisfy.
+Pure library, no interactive I/O and no disk I/O: `cli.py`, `tools/webui/`,
+`tools/webui_demo/` and `tools/audit_admin.py` are thin consumers of it.
+See README.md "Administrative channel" for the wire protocol.
 
 Typical use::
 
-    from device_api import AdminClient, MemorySecretStore, connect, discovery
+    from device_api import AdminClient, KeyfileSecretStore, connect, discovery
 
-    store = MemorySecretStore()  # or KeyfileSecretStore.load_text(open("keys.txt").read())
+    store = KeyfileSecretStore()
+    store.load_text(open("keys.txt").read())
     devices = discovery.broadcast_info(discovery.guess_broadcast_address())
     client, info, secret = connect(devices[0].source_ip, store)
     client.on(secret, info.serial)

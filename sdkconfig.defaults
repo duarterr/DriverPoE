@@ -13,8 +13,8 @@ CONFIG_ETH_USE_ESP32_EMAC=y
 # none of that INFO-level output prints (IDF-internal warnings/errors
 # still do — e.g. a flash-size mismatch warning would still show), while
 # LOG_MAXIMUM_LEVEL_INFO keeps INFO logs compiled in so our own module
-# tags can be explicitly re-enabled to INFO at runtime — see
-# quiet_boot_noise() in main/poe_luminaire_main.c.
+# tags can be explicitly re-enabled to INFO at runtime — see the
+# esp_log_level_set() calls at the top of app_main().
 CONFIG_LOG_DEFAULT_LEVEL_WARN=y
 CONFIG_LOG_MAXIMUM_LEVEL_INFO=y
 
@@ -32,23 +32,17 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
-# OTA readiness (structure/config only -- see partitions.csv's comment and
-# README.md "Atualização OTA"; no esp_ota_*_update/esp_https_ota calls that
-# actually WRITE a new image exist anywhere in this firmware yet, only the
-# confirm side below). With two OTA app slots now in the partition table,
-# this makes a bad update image safe by default: after a future update
-# mechanism switches the boot partition to the new image, the bootloader
-# marks it "pending verify" and will roll back to the previous slot on its
-# own if the new image never confirms itself (crashes, hangs the watchdog,
-# or loses power during that first boot) via
+# OTA rollback safety. OTA is implemented over the admin channel
+# (ADMIN_TYPE_OTA_* in components/admin_channel/) into the inactive of the
+# two app slots (see partitions.csv, README.md "OTA update"). With this
+# on, a bad update image is safe by default: once esp_ota_set_boot_partition
+# switches to the new image, the bootloader marks it "pending verify" and
+# rolls back to the previous slot on its own if the new image never
+# confirms itself (crash, watchdog, power loss on that first boot) via
 # esp_ota_mark_app_valid_cancel_rollback() -- see
 # confirm_app_if_pending_verify() in main/poe_luminaire_main.c, called
-# early in app_main(). Without that call, EVERY boot of an OTA-managed
-# image would stay "pending verify" forever and roll back on the next
-# unconfirmed reset, not just the first boot after a real update.
-#
-# (2026-08-20: briefly disabled to A/B-test against a slow/flaky boot --
-# same behavior with or without it, so this is back on. Not the cause.)
+# early in app_main(). Without that call, EVERY boot would stay "pending
+# verify" and roll back on the next unconfirmed reset.
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # IGMP: the DMX layer's sACN (E1.31) receiver joins a multicast group
