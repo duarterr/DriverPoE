@@ -73,6 +73,10 @@ class SpectrumItem(BaseModel):
     percent: int = Field(ge=0, le=100)
 
 
+class SpectrumRequest(BaseModel):
+    items: list[SpectrumItem] = Field(min_length=1, max_length=64)
+
+
 # ======================================================================= #
 # Discovery + patch -- all from the unauthenticated INFO response
 # ======================================================================= #
