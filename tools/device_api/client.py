@@ -333,10 +333,11 @@ class AdminClient:
 
 def find_working_secret(client: AdminClient, serial: str, store: SecretStore,
                          manual_secret_provider=None) -> tuple[bytes, bytes]:
-    """Returns (secret, nonce). Tries the key `store` has for this serial
-    (KeyfileSecretStore also returns its "all others" fallback here), then
-    -- only if `manual_secret_provider` is given -- calls it (no args,
-    returns SECRET_LEN bytes) for one from the caller.
+    """Returns (secret, nonce). Tries every key the `store` offers for
+    this serial -- for KeyfileSecretStore that's the explicit entry (if
+    any) then each "all others" fallback line, in file order -- then, only
+    if `manual_secret_provider` is given, calls it (no args, returns
+    SECRET_LEN bytes) for one from the caller.
 
     The compiled-in factory default is NOT tried automatically: if you
     want default-secret units to work, put that value in your keys file
@@ -344,18 +345,23 @@ def find_working_secret(client: AdminClient, serial: str, store: SecretStore,
     I/O beyond the network -- prompting the operator is the caller's job
     via manual_secret_provider (see cli.py for a getpass-based one)."""
     last_error: Exception | None = None
-    stored = store.get(serial)
-    if stored is not None:
+    if hasattr(store, "candidates"):
+        candidates = list(store.candidates(serial))
+    else:
+        s = store.get(serial)
+        candidates = [s] if s is not None else []
+
+    for secret in candidates:
         try:
-            return stored, client.challenge(stored, serial)
+            return secret, client.challenge(secret, serial)
         except (AuthError, DeviceTimeoutError) as e:
             # A wrong secret and an unreachable device look IDENTICAL on
             # the wire here, by design: the firmware silently drops any
             # packet whose HMAC doesn't verify (anti-oracle) instead of
             # sending back an authenticated rejection -- so a wrong
             # CHALLENGE just times out. Treating that the same as
-            # AuthError lets a stale keys-file entry fall through to the
-            # manually-typed secret instead of aborting the lookup.
+            # AuthError lets the next candidate (or the manually-typed
+            # secret) be tried instead of aborting the lookup.
             last_error = e
 
     if manual_secret_provider is None:

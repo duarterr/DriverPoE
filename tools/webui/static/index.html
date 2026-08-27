@@ -319,7 +319,7 @@ window.addEventListener('DOMContentLoaded', () => { loadInterfaces(); checkKeys(
 function renderKeysStatus(k) {
   const el = document.getElementById('keysStatus');
   if (k && k.loaded) {
-    el.textContent = `Keys loaded: ${k.count} by serial${k.has_fallback ? ' + a fallback ("all others")' : ''}. Held in memory only. `;
+    el.textContent = `Keys loaded: ${k.count} by serial${k.fallback_count ? ` + ${k.fallback_count} fallback${k.fallback_count === 1 ? '' : 's'} ("all others")` : ''}. Held in memory only. `;
     const clear = document.createElement('a');
     clear.textContent = 'clear';
     clear.href = '#'; clear.style.color = 'var(--danger)';

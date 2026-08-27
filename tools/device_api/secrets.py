@@ -60,6 +60,10 @@ class MemorySecretStore:
     def delete(self, serial: str) -> None:
         self._store.pop(serial, None)
 
+    def candidates(self, serial: str) -> list[bytes]:
+        s = self._store.get(serial)
+        return [s] if s is not None else []
+
     def as_dict(self) -> dict[str, bytes]:
         """Snapshot -- for tests/inspection only, not part of the
         SecretStore protocol."""
@@ -79,17 +83,22 @@ class KeysFileError(ValueError):
     """A keys file line didn't parse."""
 
 
-def parse_keys_file(text: str) -> tuple[dict[str, bytes], bytes | None]:
-    """Parse a keys file into ``(by_serial, fallback)``.
+def parse_keys_file(text: str) -> tuple[dict[str, bytes], list[bytes]]:
+    """Parse a keys file into ``(by_serial, fallbacks)``.
 
     One entry per line, ``<tag> <sep> <64 hex chars>``, where ``<sep>`` is
     whitespace or any of ``/ : = ,``. ``<tag>`` is a device serial
     (``DriverPoE-A4CF12B93D08``), the bare 12-hex MAC tail
     (``A4CF12B93D08``), or a fallback token (``*``, ``any``,
-    ``all others``, ...). ``#`` starts a comment. Blank lines are ignored.
+    ``all others``, ...). ``#`` starts a comment; blank lines are ignored.
+
+    More than one fallback line is allowed -- each fallback key is tried,
+    in file order, for a serial that has no explicit entry. Handy when
+    some units were re-keyed and the rest are still on the factory
+    default and you don't want to track which is which.
     """
     by_serial: dict[str, bytes] = {}
-    fallback: bytes | None = None
+    fallbacks: list[bytes] = []
     for lineno, raw in enumerate(text.splitlines(), 1):
         line = raw.split("#", 1)[0].strip()
         if not line:
@@ -100,50 +109,60 @@ def parse_keys_file(text: str) -> tuple[dict[str, bytes], bytes | None]:
         key = bytes.fromhex(m.group(1))
         tag = line[: m.start()].strip().strip("/:=,").strip()
         if not tag or tag.lower() in _FALLBACK_TOKENS:
-            fallback = key
+            if key not in fallbacks:
+                fallbacks.append(key)
         else:
             by_serial[tag] = key
-    if not by_serial and fallback is None:
+    if not by_serial and not fallbacks:
         raise KeysFileError("keys file is empty")
-    return by_serial, fallback
+    return by_serial, fallbacks
 
 
 class KeyfileSecretStore:
-    """serial -> key, from a keys file the operator loads each session.
+    """serial -> key(s), from a keys file the operator loads each session.
     RAM only -- ``set()``/``delete()`` update the in-memory map so the
     session keeps working after a CHANGE_SECRET, but nothing is ever
     written anywhere.
 
-    ``get()`` resolves in order: exact serial, bare MAC tail of the
-    serial, then the fallback key (the ``*`` / ``any`` / ``all others``
-    entry), then None.
+    ``candidates()`` yields, in order: the exact-serial key, the bare
+    MAC-tail key, then every fallback key. ``get()`` is just the first of
+    those (for callers that want a single value); find_working_secret()
+    uses ``candidates()`` and tries them all.
     """
 
-    def __init__(self, keys: dict[str, bytes] | None = None, fallback: bytes | None = None) -> None:
+    def __init__(self, keys: dict[str, bytes] | None = None, fallbacks: list[bytes] | None = None) -> None:
         self._keys: dict[str, bytes] = dict(keys or {})
-        self._fallback: bytes | None = fallback
+        self._fallbacks: list[bytes] = list(fallbacks or [])
 
     def load_text(self, text: str) -> None:
-        self._keys, self._fallback = parse_keys_file(text)
+        self._keys, self._fallbacks = parse_keys_file(text)
 
     def clear(self) -> None:
         self._keys = {}
-        self._fallback = None
+        self._fallbacks = []
 
     @property
     def loaded(self) -> bool:
-        return bool(self._keys or self._fallback is not None)
+        return bool(self._keys or self._fallbacks)
 
     def stats(self) -> dict[str, object]:
-        return {"count": len(self._keys), "has_fallback": self._fallback is not None}
+        return {"count": len(self._keys), "fallback_count": len(self._fallbacks)}
+
+    def candidates(self, serial: str) -> list[bytes]:
+        out: list[bytes] = []
+        if serial in self._keys:
+            out.append(self._keys[serial])
+        tail = serial.rpartition("-")[2]
+        if tail and tail in self._keys and self._keys[tail] not in out:
+            out.append(self._keys[tail])
+        for fb in self._fallbacks:
+            if fb not in out:
+                out.append(fb)
+        return out
 
     def get(self, serial: str) -> bytes | None:
-        if serial in self._keys:
-            return self._keys[serial]
-        tail = serial.rpartition("-")[2]
-        if tail and tail in self._keys:
-            return self._keys[tail]
-        return self._fallback
+        cands = self.candidates(serial)
+        return cands[0] if cands else None
 
     def set(self, serial: str, secret: bytes) -> None:
         if len(secret) != SECRET_LEN:
