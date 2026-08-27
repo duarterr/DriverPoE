@@ -204,6 +204,9 @@ class TestInfoPayload(unittest.TestCase):
             dmx_artnet_port_address=0x0102,
             dmx_sacn_universe=7,
             dmx_last_src_ip=(10, 0, 0, 5),
+            dmx_address=17,
+            dmx_personality=1,
+            dmx_proto_mask=3,
         )
         fields.update(overrides)
         buf = bytearray()
@@ -230,11 +233,14 @@ class TestInfoPayload(unittest.TestCase):
         buf += struct.pack(">H", fields["dmx_artnet_port_address"])
         buf += struct.pack(">H", fields["dmx_sacn_universe"])
         buf += bytes(fields["dmx_last_src_ip"])
+        buf += struct.pack(">H", fields["dmx_address"])
+        buf.append(fields["dmx_personality"])
+        buf.append(fields["dmx_proto_mask"])
         return bytes(buf)
 
     def test_parses_all_fields(self):
         payload = self._build_payload()
-        self.assertEqual(len(payload), 60)
+        self.assertEqual(len(payload), 64)
         parsed = parse_info_payload(payload)
         self.assertEqual(parsed["mac"], bytes.fromhex("A4CF12B93D08"))
         self.assertEqual(parsed["fw_version"], "1.2.3")
@@ -255,6 +261,9 @@ class TestInfoPayload(unittest.TestCase):
         self.assertEqual(parsed["dmx_artnet_port_address"], 0x0102)
         self.assertEqual(parsed["dmx_sacn_universe"], 7)
         self.assertEqual(parsed["dmx_last_src_ip"], "10.0.0.5")
+        self.assertEqual(parsed["dmx_address"], 17)
+        self.assertEqual(parsed["dmx_personality"], 1)
+        self.assertEqual(parsed["dmx_proto_mask"], 3)
 
     def test_wrong_size_rejected(self):
         with self.assertRaises(ProtocolError):

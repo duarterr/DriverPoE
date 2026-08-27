@@ -81,7 +81,9 @@ typedef struct {
     uint8_t  allow_artaddress;     /**< Honor Art-Net ArtAddress from the wire. */
 } dmx_input_config_t;
 
-/** @brief Live status for the admin INFO response / web UI. */
+/** @brief Live status for the admin INFO response / web UI. Carries enough
+ * of the patch (universe, address, personality, protocols) that the
+ * unauthenticated demo UI can build Art-Net frames from INFO alone. */
 typedef struct {
     bool     layer_enabled;
     uint8_t  active_source;        /**< dmx_active_source_t. */
@@ -90,6 +92,9 @@ typedef struct {
     uint16_t artnet_port_address;
     uint16_t sacn_universe;
     uint32_t last_src_ip;          /**< Host order; 0 if none. */
+    uint16_t dmx_address;          /**< Start channel, 1..512. */
+    uint8_t  personality;          /**< dmx_personality_t. */
+    uint8_t  proto_mask;           /**< DMX_PROTO_ARTNET | DMX_PROTO_SACN. */
 } dmx_input_status_t;
 
 /**

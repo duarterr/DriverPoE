@@ -133,6 +133,9 @@ def _device_to_dict(info: DeviceInfo) -> dict[str, Any]:
         "dmx_artnet_port_address": info.dmx_artnet_port_address,
         "dmx_sacn_universe": info.dmx_sacn_universe,
         "dmx_last_src_ip": info.dmx_last_src_ip,
+        "dmx_address": info.dmx_address,
+        "dmx_personality": info.dmx_personality,
+        "dmx_proto_mask": info.dmx_proto_mask,
     }
 
 
