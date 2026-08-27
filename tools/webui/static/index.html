@@ -172,9 +172,13 @@
         <option value="">Interface...</option>
       </select>
       <input id="bcast" class="field grow" type="text" placeholder="broadcast (auto)">
+      <label class="btn" title="Load an admin keys file (serial / key per line). Held in memory only — nothing is saved.">
+        Keys file<input type="file" id="keysFile" accept=".txt,.keys,.csv,text/plain" style="display:none" onchange="loadKeysFile(this)">
+      </label>
       <button class="btn-accent" id="scanBtn" onclick="scanDevices()">Scan network</button>
     </div>
-    <div class="scan-status" id="scanStatus">Click "Scan network" to discover luminaires on this LAN.</div>
+    <div class="scan-status" id="scanStatus">Load a keys file, then scan the LAN.</div>
+    <div class="scan-status" id="keysStatus" style="margin-top:4px">No keys loaded — commands will only reach units still on the factory default.</div>
   </section>
 
   <section class="card span2 bulk-bar" id="bulkBar">
@@ -203,22 +207,6 @@
 
 </main>
 </div>
-
-<dialog id="vaultDialog">
-  <form method="dialog" onsubmit="return false">
-    <h2 style="margin:0 0 4px;font-size:16px;">Unlock the secret vault</h2>
-    <div class="sub" style="color:var(--muted);font-size:12px;margin-bottom:10px;" id="vaultDialogMsg">
-      Per-unit admin secrets are stored encrypted. Enter the vault passphrase to continue.
-    </div>
-    <input id="vaultPass" type="password" placeholder="vault passphrase" autocomplete="off">
-    <label class="inline" style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-bottom:10px;">
-      <input type="checkbox" id="vaultCreate"> No vault yet — create one at the default path
-    </label>
-    <div class="actions">
-      <button type="button" class="btn-accent" id="vaultOk">Unlock</button>
-    </div>
-  </form>
-</dialog>
 
 <dialog id="secretDialog">
   <form method="dialog" onsubmit="return false">
@@ -321,47 +309,53 @@ function applyBcastSelection(select) {
   if (select.value) document.getElementById('bcast').value = select.value;
 }
 
-window.addEventListener('DOMContentLoaded', () => { loadInterfaces(); checkVault(); });
+window.addEventListener('DOMContentLoaded', () => { loadInterfaces(); checkKeys(); });
 
-// ---- Secret vault -----------------------------------------------------
-// Per-unit admin secrets live in an at-rest-encrypted file on the machine
-// running this backend. It's unlocked once per process with a passphrase
-// this page sends to POST /api/vault/unlock (never stored). 'memory' =
-// no vault file; secrets are then typed per unit as before.
-let vaultState = 'unknown';
-
-async function checkVault() {
-  try {
-    const r = await fetch('/api/vault');
-    const d = await r.json();
-    vaultState = d.state;
-    if (d.state === 'locked') openVaultDialog();
-  } catch (e) { /* backend not up yet -- scan will surface it */ }
-}
-
-function openVaultDialog(msg) {
-  const dlg = document.getElementById('vaultDialog');
-  if (msg) document.getElementById('vaultDialogMsg').textContent = msg;
-  if (!dlg.open) dlg.showModal();
-}
-
-document.getElementById('vaultOk').addEventListener('click', async () => {
-  const pass = document.getElementById('vaultPass').value;
-  const create = document.getElementById('vaultCreate').checked;
-  const msgEl = document.getElementById('vaultDialogMsg');
-  if (!pass) { msgEl.textContent = 'Enter the passphrase.'; return; }
-  const { ok, status, data } = await postJson('/api/vault/unlock', { passphrase: pass, create });
-  if (ok) {
-    vaultState = 'unlocked';
-    document.getElementById('vaultPass').value = '';
-    document.getElementById('vaultDialog').close();
-    document.getElementById('scanStatus').textContent = data.created
-      ? 'Vault created and unlocked. Scan the network to begin.'
-      : `Vault unlocked (${data.secret_count} secret${data.secret_count === 1 ? '' : 's'}). Scan the network to begin.`;
-    return;
+// ---- Admin keys file ------------------------------------------------
+// Nothing is stored. The operator picks a text file (serial / key per
+// line, plus an optional "all others" fallback line); the backend holds
+// it in RAM for the life of the process. Each card then shows whether a
+// working key is available for that unit.
+function renderKeysStatus(k) {
+  const el = document.getElementById('keysStatus');
+  if (k && k.loaded) {
+    el.textContent = `Keys loaded: ${k.count} by serial${k.has_fallback ? ' + a fallback ("all others")' : ''}. Held in memory only. `;
+    const clear = document.createElement('a');
+    clear.textContent = 'clear';
+    clear.href = '#'; clear.style.color = 'var(--danger)';
+    clear.onclick = async (e) => { e.preventDefault(); await postJson('/api/keys/clear'); checkKeys(); };
+    el.appendChild(clear);
+  } else {
+    el.textContent = 'No keys loaded — commands will only reach units still on the factory default.';
   }
-  msgEl.textContent = data.message || `Unlock failed (HTTP ${status}).`;
-});
+}
+
+async function checkKeys() {
+  try { renderKeysStatus(await (await fetch('/api/keys')).json()); } catch (e) {}
+}
+
+async function loadKeysFile(input) {
+  const f = input.files[0];
+  if (!f) return;
+  const form = new FormData();
+  form.append('file', f);
+  const resp = await fetch('/api/keys', { method: 'POST', body: form });
+  const data = await resp.json().catch(() => ({}));
+  input.value = '';
+  if (resp.ok) {
+    renderKeysStatus(data);
+    document.getElementById('scanStatus').textContent = 'Keys loaded. Scan the network.';
+  } else {
+    document.getElementById('keysStatus').textContent = `Keys file rejected: ${data.message || data.detail || resp.status}`;
+  }
+}
+
+function authPill(auth) {
+  if (auth === 'key') return pill('authenticated', 'on');
+  if (auth === 'default') return pill('factory default', 'warn');
+  if (auth === 'none') return pill('no key', 'err');
+  return pill('?', 'off');
+}
 
 function pill(text, cls) { return `<span class="pill ${cls}">${text}</span>`; }
 function row(label, value) { return `<div class="row"><span class="label">${label}</span> <span>${value}</span></div>`; }
@@ -392,8 +386,7 @@ async function loadDmxCfg(ip) {
     if (resp.ok) {
       dmxCfgCache[ip] = await resp.json();
     } else {
-      if (resp.status === 423) openVaultDialog();
-      // 401 auth_needed, timeout, locked vault -- show a hint, don't nag.
+      // 401 auth_needed / timeout -- show a hint, don't nag.
       dmxCfgCache[ip] = 'unavailable';
     }
   } catch (e) {
@@ -452,6 +445,7 @@ function renderDevices() {
 
       <div class="section-label">Device info</div>
       <div class="sub">${d.source_ip} &middot; fw ${d.fw_version} &middot; ${d.mac}</div>
+      <div class="row"><span class="label">Admin auth</span> <span>${authPill(d.auth)}</span></div>
 
       <hr class="divider">
 
@@ -639,6 +633,7 @@ async function scanDevices() {
     const resp = await fetch(url);
     const data = await resp.json();
     devices = data.devices || [];
+    if (data.keys) renderKeysStatus(data.keys);
     for (const k of Object.keys(dmxCfgCache)) delete dmxCfgCache[k];  // re-fetch config fresh each scan
     // indices are only meaningful within one scan's result set -- default
     // to "everything just found" selected, since bulk actions are the
@@ -690,7 +685,6 @@ function promptForSecret(message) {
 async function postJson(url, body) {
   const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
   const data = await resp.json().catch(() => ({}));
-  if (resp.status === 423 && url !== '/api/vault/unlock') openVaultDialog(data.message);
   return { ok: resp.ok, status: resp.status, data };
 }
 
@@ -927,7 +921,6 @@ async function uploadOta(i) {
 
       const resp = await fetch(`/api/devices/${d.source_ip}/ota/upload`, { method: 'POST', body: form });
       const data = await resp.json().catch(() => ({}));
-      if (resp.status === 423) { openVaultDialog(data.message); showMsg(i, 'Unlock the secret vault first.', false); return; }
 
       if (resp.ok) {
         if (data.applied) {
