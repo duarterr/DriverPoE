@@ -38,7 +38,7 @@
 #define POWERON_SETTLE_MS              2000            /**< Power-on settle delay before auto-resuming. */
 
 #define VLED_DIVIDER_RUP_OHM           560000.0f
-#define VLED_DIVIDER_RDOWN_OHM         22000.0f
+#define VLED_DIVIDER_RDOWN_OHM         22200.0f         /**< Adjusted. Was 22000 */
 #define VLED_DIVIDER_RATIO             ((VLED_DIVIDER_RUP_OHM + VLED_DIVIDER_RDOWN_OHM) / VLED_DIVIDER_RDOWN_OHM) /**< Voltage divider scale factor. */
 #define VBUS_MIN_MV                    40000           /**< Minimum valid VBUS. */
 #define VBUS_HYSTERESIS_MV             2000            /**< VBUS hysteresis margin. */

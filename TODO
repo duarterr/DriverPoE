@@ -1,3 +1,0 @@
-Recomentar todo o código no padrão doxygen. Padronizar em ingles.
-Não incluir comentários grandes dentro de funções e etc. Apenas no começo do arquivo uma descrição breve do que ele faz. nas funções, comentar o header dela, com parametros e etc.
-Nas structs e etc, apenas um comentário simples como " gpio_num_t mdc_pin;       /**< GPIO MDC. */" de preferencia compativel com doxygen
