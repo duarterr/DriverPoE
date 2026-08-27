@@ -40,7 +40,7 @@ Each device also rate-limits incoming packets to 40 per second per source IP (`a
 
 **`DIM`'s ramp**: `DIM`'s payload is `percent` (1 byte) + `ramp_ms` (4 bytes, big-endian). Nothing about brightness is persisted — the LED is off after any reboot and its level comes from the network. High-rate brightness control (effects, music, chases) belongs on the DMX layer (Art-Net/sACN), not on a stream of `DIM` commands: `DIM` still goes through the admin channel's HMAC + nonce + 40-packet/s rate limit.
 
-Dimming to 0 with a nonzero ramp doesn't cut power the instant the command is received — it fades the PWM duty down first, and only asserts the driver's hardware SHUTDOWN pin once that fade genuinely finishes on the LEDC peripheral (a hardware fade-completion callback confirms this, not a wall-clock guess), so a fixture commanded to fade out and immediately commanded to something else again mid-fade never gets stuck partway between the two.
+Reaching level 0 always asserts the driver's hardware SHUTDOWN pin — PWM duty 0 alone does **not** fully extinguish the HV9910's output, so the pin is the real cut. Going back above 0 releases it again. With a `ramp_ms` of 0 this happens immediately; with a nonzero ramp the PWM duty fades down first and SHUTDOWN is asserted only once that fade genuinely finishes on the LEDC peripheral (a hardware fade-completion callback confirms it, not a wall-clock guess), so a fixture commanded to fade out and then immediately commanded to something else mid-fade never gets stuck partway between the two. An emergency power cut (PoE lost) latches SHUTDOWN asserted until the next explicit `ON`/`DIM` or the power-ready resume path clears it.
 
 `FACTORY_RESET` erases the unit's entire NVS partition: the administrative secret (which reverts to the factory default) **and the DMX layer configuration** (`components/dmx_input/`, NVS namespace `"dmx"` — reverts to the disabled default). `hv9910` keeps no NVS state, so there's nothing there to reset — the LED is off after any reboot regardless.
 
@@ -162,7 +162,9 @@ To run the host tools' test suite (protocol, client, discovery, models, secrets,
 ```powershell
 Set-Location tools
 python -m unittest discover -s device_api/tests -v
-python -m unittest discover -s dmxtool/tests -v   # Art-Net/sACN packet wire format
+python -m unittest discover -s dmxtool/tests -v      # Art-Net/sACN packet wire format
+python -m unittest discover -s webui/tests -v        # admin route wiring (needs fastapi)
+python -m unittest discover -s webui_demo/tests -v   # demo route wiring
 ```
 
 ## Structure

@@ -6,6 +6,12 @@
  * the network (DMX or the admin channel). If a bare ON arrives with no
  * level, the driver comes up at the last level commanded THIS boot
  * (volatile, RAM only), or at 100% if nothing has set a level yet.
+ *
+ * SHUTDOWN follows the level: PWM duty 0 does NOT fully extinguish the
+ * HV9910's output, so whenever the commanded level reaches 0 the hardware
+ * SHUTDOWN pin is asserted (immediately for a 0 ramp, on fade completion
+ * for a ramp) and released again when the level goes back above 0. The
+ * TPS2378 power gate is the caller's job -- nothing here checks it.
  */
 #pragma once
 
@@ -75,16 +81,18 @@ void hv9910_emergency_disable(void);
 bool hv9910_pending_on(void);
 
 /**
- * @brief Reports whether the driver is currently enabled.
- * @return true if the driver is on.
+ * @brief Reports whether the LED is currently lit (SHUTDOWN released and
+ * duty > 0).
+ * @return true if the LED is on.
  */
 bool hv9910_is_enabled(void);
 
 /**
- * @brief Sets the LED brightness (never touches NVS). A nonzero value is
- * also remembered as the volatile "last level" for a later bare
- * hv9910_enable(). Does not itself release the SHUTDOWN gate -- pair with
- * hv9910_enable()/hv9910_enable_at() to actually light the LED.
+ * @brief Sets the LED brightness (never touches NVS). >0 releases
+ * SHUTDOWN and lights the LED; 0 asserts SHUTDOWN and turns it off (after
+ * the ramp, if any). A nonzero value is also remembered as the volatile
+ * "last level" for a later bare hv9910_enable(). Does NOT touch the
+ * network's on/off desire (hv9910_pending_on()).
  * @param percent Brightness, 0-100.
  * @param ramp_ms Ramp duration in ms.
  * @return None.
@@ -98,13 +106,16 @@ void hv9910_set_dim(uint8_t percent, uint32_t ramp_ms);
 void hv9910_identify(void);
 
 /**
- * @brief Records the desired on/off state without touching hardware --
- * used when a command arrives before power is confirmed, so the driver
- * comes up (or stays down) once it is.
+ * @brief Records the desired on/off state (and, optionally, a level to
+ * remember) without touching hardware -- used when a command arrives
+ * before power is confirmed, so the driver comes up (or stays down) once
+ * it is.
  * @param on Desired state.
+ * @param remember_pct If nonzero, also becomes the volatile "last level"
+ * a later hv9910_enable() ramps to; 0 leaves it unchanged.
  * @return None.
  */
-void hv9910_set_pending(bool on);
+void hv9910_set_pending(bool on, uint8_t remember_pct);
 
 /**
  * @brief Reports whether a ramp or identify blink is currently in progress.

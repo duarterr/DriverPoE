@@ -481,6 +481,8 @@ static void merge_tick(void)
     if ((pct != s_last_applied_pct || s_last_applied_pct < 0) && due) {
         if (tps2378_is_ready()) {
             if (hv9910_is_enabled()) {
+                /* set_dim drives SHUTDOWN too: pct 0 asserts it after the
+                 * fade (PWM duty 0 alone does not extinguish the HV9910). */
                 hv9910_set_dim(pct, cfg.smoothing_ms);
             } else if (pct > 0) {
                 hv9910_enable_at(pct, cfg.smoothing_ms);
