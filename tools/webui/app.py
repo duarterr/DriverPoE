@@ -1,11 +1,14 @@
 """DriverPoE local web UI -- FastAPI backend.
 
 Built entirely on top of the `device_api` package (../device_api/) -- no
-protocol/HMAC/AES-GCM logic of its own, and the admin secret never leaves
-this process: the browser only ever sends a secret it wants tried
-(optional, only needed the first time a unit is talked to, or after a
-FACTORY_RESET), never receives one back. See README.md "Interface web"
-for the full picture.
+protocol/HMAC/AES-GCM logic of its own. Per-unit admin secrets live in an
+at-rest-encrypted vault (`device_api.secrets.EncryptedFileSecretStore`);
+the operator unlocks it once per process with a passphrase (POST
+/api/vault/unlock, or $DRIVERPOE_VAULT_PASSPHRASE at startup) that is
+never stored. Until then every device endpoint returns 423. With no vault
+file at all, this falls back to a RAM-only store where each unit's secret
+is typed per session. A secret is only ever returned to the browser once,
+right after a CHANGE_SECRET the operator requested.
 
 Run from inside tools/:
 
@@ -15,12 +18,10 @@ Run from inside tools/:
 ...or, equivalently, `uvicorn webui.app:app --reload` from inside tools/.
 Then open http://127.0.0.1:8000/ .
 
-This is a LOCAL tool, deliberately not hardened for exposure on an
-untrusted network: it has no authentication of its own (anyone who can
-reach this HTTP server can send authenticated admin commands to any
-DriverPoE unit it can reach, exactly like tools/lumtool.py can) -- bind it
-to localhost/a trusted management network only, same posture as the admin
-UDP channel itself (see README.md "Canal de administração").
+This is a LOCAL tool: it binds 127.0.0.1 and has no operator login beyond
+the vault passphrase -- while unlocked, anything that can reach this HTTP
+server can command any DriverPoE unit. Run it on the operator's own
+machine; don't expose the port.
 """
 from __future__ import annotations
 
@@ -58,14 +59,32 @@ from device_api.protocol import (
     DmxConfig,
     ProtocolVersionMismatchError,
 )
-from device_api.secrets import DEFAULT_SECRETS_FILE, JsonFileSecretStore
+from device_api.secrets import (
+    EncryptedFileSecretStore,
+    SecretStore,
+    VaultError,
+    VaultLocked,
+    bootstrap_store,
+    default_vault_path,
+)
 
 app = FastAPI(title="DriverPoE", description="Local admin UI for DriverPoE luminaires")
 
-# Same secret store lumtool.py's CLI uses by default (tools/admin_secrets.json,
-# gitignored) -- a secret changed through one tool is immediately usable
-# from the other, no manual syncing.
-_secret_store = JsonFileSecretStore(DEFAULT_SECRETS_FILE)
+# Per-unit admin secrets live in an at-rest-encrypted vault (see
+# device_api.secrets.EncryptedFileSecretStore). The passphrase is never
+# stored -- the operator supplies it once via POST /api/unlock (or
+# $DRIVERPOE_VAULT_PASSPHRASE at startup). With no vault file at all this
+# falls back to a RAM-only store where each unit's secret is entered per
+# session. _vault_state is one of: "unlocked" | "locked" | "memory".
+_vault_state, _secret_store = bootstrap_store()
+_vault_lock = threading.Lock()
+
+
+def _require_store() -> SecretStore:
+    with _vault_lock:
+        if _secret_store is None:
+            raise HTTPException(423, "Secret vault is locked -- POST /api/unlock first.")
+        return _secret_store
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -169,14 +188,15 @@ def _resolve_secret(client: AdminClient, serial: str, secret_hex: str | None) ->
             raise HTTPException(400, f"secret must be {SECRET_LEN} bytes; got {len(secret)}")
         return secret
 
+    store = _require_store()
     try:
-        secret, _nonce = find_working_secret(client, serial, _secret_store, manual_secret_provider=manual_provider)
+        secret, _nonce = find_working_secret(client, serial, store, manual_secret_provider=manual_provider)
     except AuthError:
         if manual_was_used and secret_hex:
             raise HTTPException(401, "The provided admin secret was rejected by the device")
         raise
     if manual_was_used and secret_hex:
-        _secret_store.set(serial, secret)
+        store.set(serial, secret)
     return secret
 
 
@@ -201,6 +221,8 @@ def _error_response(e: Exception) -> JSONResponse:
         return JSONResponse(status_code=409, content={"error": "ota_transfer_failed", "message": str(e)})
     if isinstance(e, DriverPoEError):
         return JSONResponse(status_code=400, content={"error": "device_api_error", "message": str(e)})
+    if isinstance(e, HTTPException) and e.status_code == 423:
+        return JSONResponse(status_code=423, content={"error": "vault_locked", "message": e.detail})
     raise e
 
 
@@ -247,6 +269,47 @@ class DmxConfigRequest(BaseModel):
     smoothing_ms: int = 25
     allow_artaddress: bool = True
     secret_hex: str | None = None
+
+
+class UnlockRequest(BaseModel):
+    passphrase: str
+    create: bool = False   # create a new vault at the default path if none exists
+
+
+# ======================================================================= #
+# Secret vault
+# ======================================================================= #
+@app.get("/api/vault")
+def api_vault():
+    """State of the per-unit secret store. 'locked' means the operator
+    must POST /api/unlock before any device command will work."""
+    with _vault_lock:
+        state = "unlocked" if _secret_store is not None else _vault_state
+        count = None
+        if isinstance(_secret_store, EncryptedFileSecretStore):
+            count = len(_secret_store.serials())
+    return {"state": state, "path": str(default_vault_path()), "secret_count": count}
+
+
+@app.post("/api/vault/unlock")
+def api_vault_unlock(body: UnlockRequest):
+    """Derive the vault key from the passphrase and hold it in this
+    process for the rest of its life. The passphrase itself is never
+    stored. `create: true` initializes a new vault when none exists."""
+    global _secret_store, _vault_state
+    if not body.passphrase:
+        raise HTTPException(400, "passphrase must not be empty")
+    path = default_vault_path()
+    try:
+        store = EncryptedFileSecretStore(path, body.passphrase, create=body.create and not path.exists())
+    except VaultLocked:
+        raise HTTPException(401, "Wrong vault passphrase.")
+    except VaultError as e:
+        raise HTTPException(400, f"Vault: {e}")
+    with _vault_lock:
+        _secret_store = store
+        _vault_state = "unlocked"
+    return {"state": "unlocked", "secret_count": len(store.serials()), "created": store.is_new}
 
 
 # ======================================================================= #
@@ -398,7 +461,7 @@ def api_factory_reset(ip: str, body: FactoryResetRequest, port: int = DEFAULT_PO
             secret = _resolve_secret(client, info.serial, body.secret_hex)
             result = client.factory_reset(secret, info.serial)
             if result.applied:
-                _secret_store.delete(info.serial)  # device reverted its secret to the factory default too
+                _require_store().delete(info.serial)  # device reverted its secret to the factory default too
     except Exception as e:
         return _error_response(e)
     return _result_to_dict(result)
@@ -420,7 +483,7 @@ def api_change_secret(ip: str, body: ChangeSecretRequest, port: int = DEFAULT_PO
             secret = _resolve_secret(client, info.serial, body.secret_hex)
             result, applied_secret = client.change_secret(secret, info.serial, new_secret)
             if result.applied:
-                _secret_store.set(info.serial, applied_secret)
+                _require_store().set(info.serial, applied_secret)
     except Exception as e:
         return _error_response(e)
     # The new secret is returned ONCE, directly to the operator who just
