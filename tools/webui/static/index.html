@@ -6,58 +6,93 @@
 <title>DriverPoE</title>
 <style>
   :root {
-    color-scheme: light dark;
-    --bg: #f4f5f7; --fg: #1b1e22; --card: #ffffff; --border: #d9dce1;
-    --accent: #2563eb; --danger: #b3261e; --ok: #157a3d; --muted: #6b7280;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #14161a; --fg: #e7e9ec; --card: #1d2025; --border: #33373e; --muted: #9aa1ab; }
+    --bg: #060814; --ink: #f6f7ff; --muted: #a9afc7; --line: #ffffff1c;
+    --hot: #d6ff43; --violet: #8c63ff; --panel: #111526d9;
+    --danger: #ff6172; --warn: #ffbd5c;
+    /* Aliases so the rest of this file (and the .pill/.msg states below,
+       written against the old --bg/--fg/--card/--border/--accent/--ok
+       names) didn't need touching. */
+    --fg: var(--ink); --card: var(--panel); --border: var(--line);
+    --accent: var(--violet); --ok: var(--hot);
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
-  header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
-  header h1 { font-size: 18px; margin: 0; flex: 1; }
-  header input, header select { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--fg); font: inherit; font-size: 13px; }
-  header button { padding: 6px 14px; border: none; border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--fg);
+    font: 14px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; overflow-x: hidden;
+  }
+  body:before {
+    content: ""; position: fixed; inset: -30%; z-index: -2;
+    background: radial-gradient(circle at 22% 20%, #6c3eda99, transparent 25%),
+                radial-gradient(circle at 78% 30%, #1e7ce58c, transparent 25%),
+                radial-gradient(circle at 50% 95%, #b6dd2560, transparent 30%);
+    filter: blur(30px); animation: drift 12s ease-in-out infinite alternate;
+  }
+  @keyframes drift { to { transform: scale(1.13) rotate(6deg); } }
+  header {
+    padding: 16px 20px; border-bottom: 1px solid var(--border);
+    background: var(--panel); backdrop-filter: blur(18px);
+    display: flex; align-items: center; gap: 12px;
+  }
+  header h1 { font-size: 20px; letter-spacing: -.03em; margin: 0; flex: 1; }
+  header input, header select {
+    padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
+    background: #070a18; color: var(--fg); font: inherit; font-size: 13px;
+  }
+  header button {
+    appearance: none; padding: 8px 16px; border: 1px solid var(--violet); border-radius: 10px;
+    background: var(--violet); color: #fff; font: inherit; font-weight: 650; cursor: pointer; transition: .18s;
+  }
+  header button:hover:not(:disabled) { transform: translateY(-2px); }
   header button:disabled { opacity: .5; cursor: default; }
-  main { padding: 16px 20px; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
-  .card h2 { font-size: 15px; margin: 0 0 4px; padding-right: 28px; }
+  main { padding: 20px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 18px;
+    backdrop-filter: blur(18px); box-shadow: 0 18px 50px #0006; padding: 18px;
+  }
+  .card h2 { font-size: 16px; letter-spacing: -.02em; margin: 0 0 4px; padding-right: 28px; }
   .card .sub { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; font-size: 13px; }
   .row .label { color: var(--muted); }
-  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
-  .pill.on { background: #16a34a22; color: var(--ok); }
-  .pill.off { background: #6b728022; color: var(--muted); }
-  .pill.warn { background: #f59e0b22; color: #92600a; }
-  .pill.err { background: #ef444422; color: var(--danger); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+  .pill.on { background: #d6ff4322; color: var(--hot); }
+  .pill.off { background: #ffffff14; color: var(--muted); }
+  .pill.warn { background: #ffbd5c22; color: var(--warn); }
+  .pill.err { background: #ff617222; color: var(--danger); }
   /* Shared style for every button inside a card -- On/Off/Identify, Get
      status, Reboot/Factory reset/Change secret, Upload firmware all use
      this SAME rule, so they're identical in size/font/style; .btn-danger
      only overrides color, everything else (padding, border-radius, font,
      min-width) stays shared. */
-  .btn { min-width: 92px; padding: 7px 12px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--fg); cursor: pointer; font: inherit; font-size: 12px; text-align: center; }
-  .btn:hover { border-color: var(--accent); }
-  .btn:disabled { opacity: .5; cursor: default; }
-  .btn-danger { color: var(--danger); border-color: var(--danger); }
+  .btn {
+    min-width: 92px; padding: 7px 12px; border: 1px solid #ffffff28; border-radius: 8px;
+    background: #ffffff0c; color: var(--fg); cursor: pointer; font: inherit; font-weight: 650;
+    font-size: 12px; text-align: center; transition: .18s;
+  }
+  .btn:hover:not(:disabled) { transform: translateY(-1px); border-color: #fff7; background: #ffffff1d; }
+  .btn:disabled { opacity: .48; cursor: default; }
+  .btn-danger { color: var(--danger); border-color: #ff617255; }
   .btn-fill { flex: 1; min-width: 0; } /* the 6 On/Off/Identify + Reboot/Factory reset/Change secret buttons -- each fills 1/3 of its row instead of the shared min-width */
   .controls { margin-top: 10px; }
   .controls-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .controls-row:first-child { margin-top: 0; }
   .dim-wrap { position: relative; flex: 1; min-width: 100px; display: flex; align-items: center; }
-  .dim-wrap input[type=range] { width: 100%; vertical-align: middle; }
-  .dim-tip { position: absolute; bottom: 100%; transform: translateX(-50%); margin-bottom: 4px; padding: 2px 6px; border-radius: 4px; background: var(--fg); color: var(--card); font-size: 11px; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity .1s; }
+  .dim-wrap input[type=range] { width: 100%; vertical-align: middle; accent-color: var(--hot); }
+  .dim-tip { position: absolute; bottom: 100%; transform: translateX(-50%); margin-bottom: 4px; padding: 2px 6px; border-radius: 4px; background: var(--ink); color: #0b0d1a; font-size: 11px; font-weight: 700; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity .1s; }
   .dim-tip.show { opacity: 1; }
-  .msg { margin-top: 8px; font-size: 12px; padding: 6px 8px; border-radius: 6px; display: none; }
+  .msg { margin-top: 8px; font-size: 12px; padding: 6px 8px; border-radius: 8px; display: none; }
   .msg.show { display: block; }
-  .msg.ok { background: #16a34a1a; color: var(--ok); }
-  .msg.err { background: #ef44441a; color: var(--danger); }
+  .msg.ok { background: #d6ff431a; color: var(--hot); }
+  .msg.err { background: #ff61721a; color: var(--danger); }
   .empty { color: var(--muted); padding: 40px; text-align: center; grid-column: 1 / -1; }
-  dialog { border-radius: 10px; border: 1px solid var(--border); padding: 16px; background: var(--card); color: var(--fg); }
-  dialog input[type=text] { width: 100%; padding: 6px; margin: 6px 0 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
+  dialog {
+    border-radius: 16px; border: 1px solid var(--border); padding: 18px;
+    background: #171b2fee; backdrop-filter: blur(18px); color: var(--fg); box-shadow: 0 24px 60px #0008;
+  }
+  dialog::backdrop { background: #04050bb0; }
+  dialog input[type=text] { width: 100%; padding: 8px 10px; margin: 8px 0 14px; border: 1px solid var(--border); border-radius: 8px; background: #070a18; color: var(--fg); font: inherit; }
   dialog .actions { display: flex; justify-content: flex-end; gap: 8px; }
   .card .info { margin: 8px 0 4px; }
-  .section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 6px; }
+  .section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em; color: var(--hot); margin: 0 0 6px; }
   .section-label-sub { margin-top: 10px; } /* a sub-heading within the same divider-bounded section (e.g. "Admin controls" under "Controls") -- some breathing room from the group above, no full divider needed */
   .card hr.divider { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
   .center-row { display: flex; justify-content: center; margin-top: 8px; }
@@ -67,7 +102,7 @@
   .ota-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .ota-row input[type=file] {
     flex: 1; min-width: 120px; font: inherit; font-size: 12px; color: var(--fg);
-    padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg);
+    padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: #070a18;
   }
   /* The browser's own "Choose file" sub-button, styled to match .btn --
      ::file-selector-button is the standard pseudo-element (Chrome/Edge/
@@ -75,26 +110,30 @@
      of the same thing, kept alongside for it specifically. */
   .ota-row input[type=file]::file-selector-button,
   .ota-row input[type=file]::-webkit-file-upload-button {
-    margin-right: 8px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 5px;
-    background: transparent; color: var(--fg); font: inherit; font-size: 12px; cursor: pointer;
+    margin-right: 8px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px;
+    background: #ffffff0c; color: var(--fg); font: inherit; font-size: 12px; cursor: pointer;
   }
   .ota-row input[type=file]:hover::file-selector-button,
-  .ota-row input[type=file]:hover::-webkit-file-upload-button { border-color: var(--accent); }
-  .ota-progress { display: none; margin-top: 6px; height: 16px; border-radius: 4px; background: var(--bg); border: 1px solid var(--border); overflow: hidden; }
+  .ota-row input[type=file]:hover::-webkit-file-upload-button { border-color: #fff7; }
+  .ota-progress { display: none; margin-top: 6px; height: 16px; border-radius: 99px; background: #ffffff13; border: 1px solid var(--border); overflow: hidden; }
   .ota-progress.show { display: block; }
-  .ota-bar { height: 100%; width: 0%; background: var(--accent); color: #fff; font-size: 10px; line-height: 16px; text-align: center; white-space: nowrap; transition: width .2s; }
+  .ota-bar {
+    height: 100%; width: 0%; background: var(--hot);
+    color: #0b0d1a; font-size: 10px; font-weight: 700;
+    line-height: 16px; text-align: center; white-space: nowrap; transition: width .2s;
+  }
 
-  .select-check { position: absolute; top: 12px; right: 12px; width: 18px; height: 18px; cursor: pointer; }
+  .select-check { position: absolute; top: 12px; right: 12px; width: 18px; height: 18px; cursor: pointer; accent-color: var(--hot); }
   .card { position: relative; }
 
-  .bulk-bar { display: none; background: var(--card); border-bottom: 1px solid var(--border); padding: 10px 20px; }
+  .bulk-bar { display: none; background: var(--panel); backdrop-filter: blur(18px); border-bottom: 1px solid var(--border); padding: 10px 20px; }
   .bulk-bar.show { display: block; }
   .bulk-bar .bulk-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
   .bulk-bar .bulk-row:first-child { margin-top: 0; }
-  .bulk-count { font-size: 13px; font-weight: 600; margin-right: 4px; }
+  .bulk-count { font-size: 13px; font-weight: 700; margin-right: 4px; color: var(--hot); }
   .bulk-bar .btn { min-width: 0; padding: 6px 12px; }
   .bulk-dim-wrap { position: relative; flex: 1; min-width: 140px; max-width: 260px; display: flex; align-items: center; }
-  .bulk-dim-wrap input[type=range] { width: 100%; }
+  .bulk-dim-wrap input[type=range] { width: 100%; accent-color: var(--hot); }
 </style>
 </head>
 <body>
@@ -113,6 +152,7 @@
     <button class="btn" onclick="bulkOn()">On</button>
     <button class="btn" onclick="bulkOff()">Off</button>
     <button class="btn" onclick="bulkIdentify()">Identify</button>
+    <button class="btn" onclick="bulkStatus()">Get status</button>
     <div class="bulk-dim-wrap">
       <span class="dim-tip" id="bulk-dim-tip">50%</span>
       <input type="range" id="bulkDimSlider" min="0" max="100" step="1" value="50"
@@ -144,7 +184,7 @@
 // ----------------------------------------------------------------------
 // No protocol/HMAC/secret logic here -- this page only ever calls the
 // FastAPI backend's JSON API (app.py), which does all of that via the
-// driverpoe package. The one secret this page ever handles is an admin
+// device_api package. The one secret this page ever handles is an admin
 // secret the OPERATOR chooses to type in (or a freshly changed one shown
 // back after "Change admin secret") -- never anything read off the wire.
 // ----------------------------------------------------------------------
@@ -318,6 +358,7 @@ async function runBulk(fn) {
 async function bulkOn() { await runBulk((i) => cmd(i, 'on')); }
 async function bulkOff() { await runBulk((i) => cmd(i, 'off')); }
 async function bulkIdentify() { await runBulk((i) => cmd(i, 'identify')); }
+async function bulkStatus() { await runBulk((i) => showStatus(i)); }
 
 function bulkDimInput(el) {
   const tip = document.getElementById('bulk-dim-tip');
@@ -506,7 +547,7 @@ async function doChangeSecret(i, newSecretHex) {
 
 // OTA -- pushes a .bin over an HTTP multipart upload to the backend,
 // which then relays it to the device over the admin UDP channel (see
-// driverpoe.client.AdminClient.ota_update()); this page never speaks the
+// device_api.client.AdminClient.ota_update()); this page never speaks the
 // device protocol directly. While the upload is in flight, a separate
 // poll loop reads /ota/progress to animate the bar -- the upload response
 // itself only arrives once the whole transfer (and the device's final
