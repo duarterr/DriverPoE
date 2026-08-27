@@ -130,11 +130,11 @@ class ReactiveMapper:
         hop=512,
         fmin=40.0,
         fmax=8000.0,         # above ~8 kHz music has little useful energy
-        flux_mix=0.6,        # 0=level only, 1=attack/onset only
-        gamma=1.6,           # perceptual brightness correction
-        gate=0.05,           # below this, the luminaire goes dark (silence)
-        attack=0.85,         # snaps on the beat (lower = smoother)
-        release=0.10,        # decay fade (lower = longer fade)
+        flux_mix=1.0,        # 0=level only, 1=attack/onset only
+        gamma=0.6,           # perceptual brightness correction
+        gate=0.3,            # below this, the luminaire goes dark (silence)
+        attack=0.95,         # snaps on the beat (lower = smoother)
+        release=0.3,         # decay fade (lower = longer fade)
         agc_decay=0.995,
     ):
         self.n_bands = n_bands

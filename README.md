@@ -33,7 +33,7 @@ Custom binary protocol over UDP, port `5001` (`ADMIN_UDP_PORT`), version `4` (`A
 
 The default secret is known (it's in this repository) — this layer's real security comes from changing it during installation, not from keeping it secret. Treat it like the default password printed on the bottom of a home router.
 
-Each device also rate-limits incoming packets to 20 per second per source IP (`admin_channel.c`, `RATE_LIMIT_MAX_PER_WINDOW`); anything past that is silently dropped, with no response at all — indistinguishable on the wire from the packet never arriving. A client that dims or sends other write commands at a high, sustained rate (a lighting effect, a music-reactive mode) needs to stay comfortably under this, and should expect an occasional dropped update to be normal rather than a bug.
+Each device also rate-limits incoming packets to 40 per second per source IP (`admin_channel.c`, `RATE_LIMIT_MAX_PER_WINDOW`); anything past that is silently dropped, with no response at all — indistinguishable on the wire from the packet never arriving. A client that dims or sends other write commands at a high, sustained rate (a lighting effect, a music-reactive mode) needs to stay comfortably under this, and should expect an occasional dropped update to be normal rather than a bug.
 
 **`ON`/`DIM` semantics**: the admin channel only starts listening after power has already been confirmed, so in practice this is rarely hit — but if an `ON` or `DIM>0` arrives while `tps2378_is_ready()` is false (e.g. power dropped and hasn't returned yet), the command is accepted and the intent is persisted anyway (never turning the driver on outside the TPS2378's electrical gate) — the response uses the `ACCEPTED_PENDING` status, distinct from `OK`, to make that explicit to the caller. The LED turns on by itself, at the requested brightness, as soon as power is confirmed (or reconfirmed). `OFF`/`DIM 0` always apply and normally persist immediately, regardless of power state — see the ramp/persistence notes below for the two ways that's more nuanced than it sounds.
 
@@ -45,7 +45,7 @@ Dimming to 0 with a nonzero ramp doesn't cut power the instant the command is re
 
 ### Host tools
 
-All of the protocol/HMAC/AES-GCM/discovery logic lives in a single pure Python package, `tools/device_api/` (no `input()`/`print()`/side effects outside the network) — `tools/lumtool.py` and `tools/webui/` are consumers of that package, not parallel reimplementations of it.
+All of the protocol/HMAC/AES-GCM/discovery logic lives in a single pure Python package, `tools/device_api/` (no `input()`/`print()`/side effects outside the network) — `tools/webui/` and `tools/webui_demo/` are consumers of that package, not parallel reimplementations of it.
 
 **`tools/device_api/`** — Python API:
 
@@ -60,12 +60,6 @@ All of the protocol/HMAC/AES-GCM/discovery logic lives in a single pure Python p
 
 ```powershell
 python -c "from device_api import discovery, connect, JsonFileSecretStore; d=discovery.broadcast_info(discovery.guess_broadcast_address()); print(d)"
-```
-
-**`tools/lumtool.py`** — thin CLI over the package above (interactive menu: scan, select, control, administer):
-
-```powershell
-python tools/lumtool.py
 ```
 
 **`tools/webui/`** — local web UI (FastAPI + plain HTML/JS, no frontend framework), consuming the `device_api` package exclusively on the backend; the admin secret is never sent to the browser except once, back to the operator, right after a `CHANGE_SECRET` they themselves requested:
@@ -137,7 +131,6 @@ python -m unittest discover -s device_api/tests -v
 | `components/devid/` | Serial, MAC, and administrative secret. |
 | `components/status_leds/` | Board status LEDs. |
 | `tools/device_api/` | Python package: protocol, client, discovery, models, secrets. |
-| `tools/lumtool.py` | Discovery/control/admin CLI, built on `tools/device_api/`. |
 | `tools/webui/` | Local web UI (FastAPI), built on `tools/device_api/`. |
 
 ## OTA update
