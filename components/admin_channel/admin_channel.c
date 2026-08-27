@@ -492,7 +492,7 @@ static void handle_on(int sock, const parsed_header_t *hdr,
     uint32_t ramp_ms = get_u32_be(payload);
 
     if (!tps2378_is_ready()) {
-        hv9910_set_pending(true);
+        hv9910_set_pending(true, 0);
         send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_ON_RESP, ADMIN_STATUS_ACCEPTED_PENDING, devid_get_admin_secret());
         return;
     }
@@ -549,17 +549,13 @@ static void handle_dim(int sock, const parsed_header_t *hdr,
     }
 
     if (!tps2378_is_ready()) {
-        hv9910_set_pending(true);
-        hv9910_set_dim(percent, ramp_ms);   // remembers the level; SHUTDOWN stays asserted until power is confirmed
+        hv9910_set_pending(true, percent);   // remembers the level; the driver comes up once power is confirmed
         send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DIM_RESP, ADMIN_STATUS_ACCEPTED_PENDING, devid_get_admin_secret());
         return;
     }
 
-    if (!hv9910_is_enabled()) {
-        hv9910_enable_at(percent, ramp_ms);
-    } else {
-        hv9910_set_dim(percent, ramp_ms);
-    }
+    // enable_at clears the power-cut latch, records the desire, releases SHUTDOWN and ramps.
+    hv9910_enable_at(percent, ramp_ms);
     send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DIM_RESP, ADMIN_STATUS_OK, devid_get_admin_secret());
 }
 

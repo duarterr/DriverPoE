@@ -50,20 +50,22 @@ static int shutdown_assert_level(void) { return s_config.shutdown_active_high ? 
  */
 static int shutdown_run_level(void)    { return s_config.shutdown_active_high ? 0 : 1; }
 
-static volatile bool s_enabled = false;
+static volatile bool s_enabled = false;              /* SHUTDOWN released and duty > 0 -- i.e. LED lit */
 static volatile uint8_t s_dim_percent = 0;
 static volatile uint8_t s_last_nonzero_percent = 0;  /* 0 = no level set this boot */
 static volatile bool s_desired_on = false;           /* network's last on/off desire; survives a power blip */
+static volatile bool s_power_cut = false;            /* set by EMERGENCY_OFF; blocks SET_DIM from re-releasing
+                                                        SHUTDOWN until an explicit ENABLE clears it */
 static bool s_ledc_started = false;
 
 /** @brief Command types accepted by hv9910_task. */
 typedef enum {
-    HV_CMD_ENABLE,            /**< Release SHUTDOWN, ramp to cmd.percent. */
+    HV_CMD_ENABLE,            /**< Clear the power-cut latch, set s_desired_on, ramp to cmd.percent. */
     HV_CMD_DISABLE,
-    HV_CMD_SET_DIM,
+    HV_CMD_SET_DIM,           /**< Set the level; SHUTDOWN follows it (0 -> off, >0 -> lit). */
     HV_CMD_IDENTIFY,
-    HV_CMD_SET_PENDING,       /**< Record cmd.on as the desired state; no hardware change. */
-    HV_CMD_EMERGENCY_OFF,     /**< Assert SHUTDOWN now; leave s_desired_on untouched. */
+    HV_CMD_SET_PENDING,       /**< Record cmd.on (+ optionally cmd.percent as the last level); no hardware change. */
+    HV_CMD_EMERGENCY_OFF,     /**< Assert SHUTDOWN now, latch it; leave s_desired_on untouched. */
     HV_CMD_FADE_TO_ZERO_DONE, /**< Internal only, posted by hv_fade_end_cb() -- never sent by post_cmd() callers. */
 } hv9910_cmd_type_t;
 
@@ -71,7 +73,7 @@ typedef enum {
 typedef struct {
     hv9910_cmd_type_t type; /**< Command type. */
     uint32_t ramp_ms;       /**< Ramp duration, for ENABLE/DISABLE/SET_DIM. */
-    uint8_t percent;        /**< Brightness, for ENABLE/SET_DIM. */
+    uint8_t percent;        /**< Brightness, for ENABLE/SET_DIM; level to remember for SET_PENDING. */
     bool on;                /**< Desired state, for SET_PENDING. */
 } hv9910_cmd_t;
 
@@ -181,7 +183,10 @@ static void ledc_start_if_needed(void)
 }
 
 /**
- * @brief Sets the LEDC duty cycle, with an optional hardware fade.
+ * @brief Sets the LEDC duty cycle (with an optional fade) and drives
+ * SHUTDOWN to match: >0 releases it and lights the LED, 0 asserts it
+ * (immediately for a 0 ramp, on fade completion for a ramp) because PWM
+ * duty 0 alone does not fully extinguish the HV9910.
  * @param percent Brightness, 0-100.
  * @param ramp_ms Ramp duration in ms; 0 for an instant change.
  * @param remember true to record a nonzero level as the volatile "last
@@ -202,12 +207,23 @@ static void hv_do_set_dim(uint8_t percent, uint32_t ramp_ms, bool remember)
 
     uint32_t duty = ((uint32_t)percent * LEDC_DUTY_MAX) / 100;
 
+    if (percent > 0 && !s_power_cut && !s_enabled) {
+        shutdown_write(shutdown_run_level());
+        s_enabled = true;
+        ESP_LOGW(TAG, "Driver ON (SHUTDOWN released)");
+    }
+
     if (ramp_ms == 0) {
         s_awaiting_shutdown_fade = false;
         ledc_set_duty(LEDC_SPEED_MODE, LEDC_CHANNEL, duty);
         ledc_update_duty(LEDC_SPEED_MODE, LEDC_CHANNEL);
+        if (percent == 0 && s_enabled) {
+            shutdown_write(shutdown_assert_level());
+            s_enabled = false;
+            ESP_LOGI(TAG, "Driver OFF (SHUTDOWN asserted -- duty 0)");
+        }
     } else {
-        // Arms/disarms hv_fade_end_cb()'s shutdown intent for this fade.
+        // percent==0 -> arm hv_fade_end_cb() to assert SHUTDOWN when the fade finishes.
         s_awaiting_shutdown_fade = (percent == 0);
         ledc_set_fade_with_time(LEDC_SPEED_MODE, LEDC_CHANNEL, duty, (int)ramp_ms);
         ledc_fade_start(LEDC_SPEED_MODE, LEDC_CHANNEL, LEDC_FADE_NO_WAIT);
@@ -217,7 +233,8 @@ static void hv_do_set_dim(uint8_t percent, uint32_t ramp_ms, bool remember)
 }
 
 /**
- * @brief Releases SHUTDOWN and ramps to an explicit brightness.
+ * @brief Marks the driver as network-desired-on and ramps to an explicit
+ * brightness. Clears the power-cut latch so a resume after a blip works.
  * @param percent Target brightness, 0-100.
  * @param ramp_ms Ramp duration in ms.
  * @return None.
@@ -225,28 +242,19 @@ static void hv_do_set_dim(uint8_t percent, uint32_t ramp_ms, bool remember)
 static void hv_do_enable(uint8_t percent, uint32_t ramp_ms)
 {
     s_desired_on = true;
-    shutdown_write(shutdown_run_level());
-    s_enabled = true;
-    hv_do_set_dim(percent, ramp_ms, true);
-    ESP_LOGW(TAG, "Driver ENABLED (SHUTDOWN released), ramping to %u%% over %ums", percent, (unsigned)ramp_ms);
+    s_power_cut = false;
+    hv_do_set_dim(percent, ramp_ms, true);  /* releases SHUTDOWN for percent > 0 */
 }
 
 /**
- * @brief Ramps the brightness to 0 and disables the driver.
+ * @brief Ramps the brightness to 0 and turns the driver off.
  * @param ramp_ms Ramp duration in ms.
  * @return None.
  */
 static void hv_do_disable(uint32_t ramp_ms)
 {
     s_desired_on = false;
-    hv_do_set_dim(0, ramp_ms, true);
-
-    if (ramp_ms == 0) {
-        shutdown_write(shutdown_assert_level());
-        s_enabled = false;
-        ESP_LOGI(TAG, "Driver DISABLED (SHUTDOWN asserted)");
-    }
-    // else: SHUTDOWN fires later, from HV_CMD_FADE_TO_ZERO_DONE.
+    hv_do_set_dim(0, ramp_ms, true);  /* asserts SHUTDOWN now (0 ramp) or on fade end */
 }
 
 /**
@@ -257,14 +265,9 @@ static void do_identify_step(void)
 {
     if (s_identify_steps_left <= 0) {
         /* Restore exactly what we found -- identify must not disturb the
-         * on/off desire or the remembered level. */
-        if (s_identify_saved_enabled) {
-            hv_do_set_dim(s_identify_saved_dim, 0, false);
-        } else {
-            shutdown_write(shutdown_assert_level());
-            s_enabled = false;
-            hv_do_set_dim(0, 0, false);
-        }
+         * on/off desire or the remembered level. hv_do_set_dim() drives
+         * SHUTDOWN both ways. */
+        hv_do_set_dim(s_identify_saved_enabled ? s_identify_saved_dim : 0, 0, false);
         s_desired_on = s_identify_saved_desired;
         s_pending = PENDING_NONE;
         return;
@@ -287,16 +290,10 @@ static void hv_do_identify(void)
     s_identify_saved_enabled = s_enabled;
     s_identify_saved_dim = s_dim_percent;
     s_identify_saved_desired = s_desired_on;
-
-    if (!s_enabled) {
-        // Light the driver just for the blink -- no change to the on/off
-        // desire or the remembered level.
-        shutdown_write(shutdown_run_level());
-        s_enabled = true;
-    }
+    s_power_cut = false;   /* IDENTIFY only runs once power is confirmed */
 
     s_identify_steps_left = IDENTIFY_BLINK_CYCLES * 2;
-    s_identify_next_is_on = false;
+    s_identify_next_is_on = true;   /* first step lights it */
     do_identify_step();
 }
 
@@ -322,10 +319,17 @@ static void dispatch_cmd(const hv9910_cmd_t *cmd)
         break;
     case HV_CMD_SET_PENDING:
         s_desired_on = cmd->on;
+        if (cmd->percent > 0) {
+            s_last_nonzero_percent = cmd->percent;
+        }
         break;
     case HV_CMD_EMERGENCY_OFF:
         // SHUTDOWN is the real cut; duty is irrelevant while it's asserted.
+        // s_power_cut latches so a SET_DIM already queued behind this can't
+        // re-release SHUTDOWN before an explicit ENABLE (or the power-ready
+        // path) says it's safe.
         s_awaiting_shutdown_fade = false;
+        s_power_cut = true;
         shutdown_write(shutdown_assert_level());
         s_enabled = false;
         s_dim_percent = 0;
@@ -508,9 +512,9 @@ void hv9910_identify(void)
     post_cmd(&cmd, false);
 }
 
-void hv9910_set_pending(bool on)
+void hv9910_set_pending(bool on, uint8_t remember_pct)
 {
-    hv9910_cmd_t cmd = { .type = HV_CMD_SET_PENDING, .on = on };
+    hv9910_cmd_t cmd = { .type = HV_CMD_SET_PENDING, .on = on, .percent = remember_pct };
     post_cmd(&cmd, false);
 }
 
