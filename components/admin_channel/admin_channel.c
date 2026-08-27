@@ -509,8 +509,8 @@ static void handle_off(int sock, const parsed_header_t *hdr,
  * @brief Handles DIM: sets brightness, or defers turning on if power isn't confirmed.
  * @param sock UDP socket.
  * @param hdr Parsed request header.
- * @param payload Request payload (percent, ramp_ms).
- * @param payload_len Payload length.
+ * @param payload Request payload (percent, ramp_ms, optional transient flag byte).
+ * @param payload_len Payload length: 5 (legacy) or 6 (with the flag byte).
  * @param src Source address.
  * @return None.
  */
@@ -518,30 +518,39 @@ static void handle_dim(int sock, const parsed_header_t *hdr,
                         const uint8_t *payload, uint16_t payload_len,
                         const struct sockaddr_in *src)
 {
-    if (payload_len != 5 || payload[0] > 100) {
+    if ((payload_len != 5 && payload_len != 6) || payload[0] > 100) {
         send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DIM_RESP, ADMIN_STATUS_ERR_BAD_ARG, devid_get_admin_secret());
         return;
     }
     uint8_t percent = payload[0];
     uint32_t ramp_ms = get_u32_be(payload + 1);
+    // Optional 6th byte, bit 0: "transient" -- skip persisting this as the
+    // resume brightness. Absent (5-byte legacy payload) means persist, same
+    // as always; a music-reactive or chase-effect caller sets it so a rapid
+    // stream of dims doesn't turn into a rapid stream of NVS writes (each one
+    // a blocking flash commit on the same task that drains the command
+    // queue -- enough of them in a row and the queue backs up, so brightness
+    // lags further and further behind what was actually requested).
+    bool transient = (payload_len == 6) && (payload[5] & 0x01);
+    bool persist = !transient;
 
     if (percent == 0) {
-        hv9910_disable(ramp_ms, true);
+        hv9910_disable(ramp_ms, persist);
         send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DIM_RESP, ADMIN_STATUS_OK, devid_get_admin_secret());
         return;
     }
 
     if (!tps2378_is_ready()) {
         hv9910_persist_intent(true);
-        hv9910_set_dim(percent, ramp_ms);
+        hv9910_set_dim(percent, ramp_ms, persist);
         send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DIM_RESP, ADMIN_STATUS_ACCEPTED_PENDING, devid_get_admin_secret());
         return;
     }
 
     if (!hv9910_is_enabled()) {
-        hv9910_enable(0, true);
+        hv9910_enable(0, persist);
     }
-    hv9910_set_dim(percent, ramp_ms);
+    hv9910_set_dim(percent, ramp_ms, persist);
     send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DIM_RESP, ADMIN_STATUS_OK, devid_get_admin_secret());
 }
 

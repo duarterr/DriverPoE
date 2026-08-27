@@ -66,9 +66,12 @@ bool hv9910_is_enabled(void);
  * @brief Sets the LED brightness.
  * @param percent Brightness, 0-100.
  * @param ramp_ms Ramp duration in ms.
+ * @param persist true to remember this as the resume brightness (NVS write);
+ * false for a transient/cosmetic dim (an effect frame, a music-reactive
+ * update) that shouldn't touch flash at all.
  * @return None.
  */
-void hv9910_set_dim(uint8_t percent, uint32_t ramp_ms);
+void hv9910_set_dim(uint8_t percent, uint32_t ramp_ms, bool persist);
 
 /**
  * @brief Runs the visual identify blink sequence.
