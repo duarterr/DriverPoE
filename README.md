@@ -6,7 +6,7 @@ Firmware for a PoE-powered LED luminaire. It runs on an ESP32, gets power throug
 
 - Confirms PoE or auxiliary power is stable before releasing the LED.
 - Measures bus voltage and LED voltage.
-- Turns on, turns off, and dims with a smooth ramp.
+- Turns on, turns off, and dims — instantly (fades come from the DMX layer / console), through one of three runtime-selectable dimming modes (see "Driver / dimming modes").
 - Always powers up with the LED **off**. No brightness or on/off state is stored — the on-level comes from the first network command (DMX or admin); a bare `ON` uses the last level commanded since boot, or 100% if none.
 - Gets an IP over Ethernet DHCP, announcing itself with the hostname "DriverPoE" (instead of ESP-IDF's default "espressif") in the router's client list.
 - Allows local and remote control over an authenticated UDP channel (`tools/device_api/`, or the web UI in `tools/webui/`).
@@ -30,19 +30,19 @@ Ethernet only starts once power is confirmed; from there the firmware starts the
 
 Custom binary protocol over UDP, port `5001` (`ADMIN_UDP_PORT`), version `5` (`ADMIN_PROTO_VERSION` in `components/admin_channel/admin_protocol.h`). A packet whose version byte isn't `5` is dropped, both ways. The unauthenticated `INFO` response ends with a 16-byte DMX status block (payload 64 bytes total) — live level/fps/source plus the full patch (universe, DMX start address, personality, protocols), so a read-only tool like `tools/webui_demo` never needs an authenticated call.
 
-**Security model**: each unit has a 32-byte secret (`components/devid/devid.h`), written to NVS automatically with a documented factory-default value (`ADMIN_DEFAULT_SECRET`, in `main/poe_luminaire_main.h`) on first boot — and again after any `FACTORY_RESET`, which erases the same NVS partition the secret lives in. `INFO` is the only unauthenticated command (pure read, no side effect, answered to anyone — including broadcast). Every command that changes something (`ON`/`OFF`/`DIM`/`IDENTIFY`/`REBOOT`/`FACTORY_RESET`/`CHANGE_SECRET`/`DMX_SET_CONFIG`) — and `DMX_GET_CONFIG` — requires HMAC-SHA256 with the active secret **and** a single-use nonce obtained via `CHALLENGE` immediately before, bound to the source IP and short-lived (5 s) — this protects against replaying a captured packet, not just forgery. `CHANGE_SECRET` swaps the secret directly (payload encrypted with AES-256-GCM under the current secret), with no separate confirmation step.
+**Security model**: each unit has a 32-byte secret (`components/devid/devid.h`), written to NVS automatically with a documented factory-default value (`ADMIN_DEFAULT_SECRET`, in `main/poe_luminaire_main.h`) on first boot — and again after any `FACTORY_RESET`, which erases the same NVS partition the secret lives in. `INFO` is the only unauthenticated command (pure read, no side effect, answered to anyone — including broadcast). Every command that changes something (`ON`/`OFF`/`DIM`/`IDENTIFY`/`REBOOT`/`FACTORY_RESET`/`CHANGE_SECRET`/`DMX_SET_CONFIG`/`DRIVER_SET_CONFIG`) — and `DMX_GET_CONFIG`/`DRIVER_GET_CONFIG` — requires HMAC-SHA256 with the active secret **and** a single-use nonce obtained via `CHALLENGE` immediately before, bound to the source IP and short-lived (5 s) — this protects against replaying a captured packet, not just forgery. `CHANGE_SECRET` swaps the secret directly (payload encrypted with AES-256-GCM under the current secret), with no separate confirmation step.
 
 The default secret is known (it's in this repository) — this layer's real security comes from changing it during installation, not from keeping it secret. Treat it like the default password printed on the bottom of a home router. The host tools never try it automatically: to reach a unit that's still on the default you put its value in your keys file (see "Per-unit admin keys" below).
 
 Each device also rate-limits incoming packets to 40 per second per source IP (`admin_channel.c`, `RATE_LIMIT_MAX_PER_WINDOW`); anything past that is silently dropped, with no response at all — indistinguishable on the wire from the packet never arriving. A client that dims or sends other write commands at a high, sustained rate (a lighting effect, a music-reactive mode) needs to stay comfortably under this, and should expect an occasional dropped update to be normal rather than a bug.
 
-**`ON`/`DIM` semantics**: the admin channel only starts listening after power has already been confirmed, so in practice this is rarely hit — but if an `ON` or `DIM>0` arrives while `tps2378_is_ready()` is false (e.g. power dropped and hasn't returned yet), the command is accepted and the intent is recorded in RAM (never turning the driver on outside the TPS2378's electrical gate) — the response uses the `ACCEPTED_PENDING` status, distinct from `OK`, to make that explicit to the caller. The LED turns on by itself, at the requested brightness, as soon as power is confirmed. A bare `ON` (no brightness) comes up at the last level commanded since boot, or 100% if none. `OFF`/`DIM 0` always apply immediately regardless of power state — see the ramp notes below for the way that's more nuanced than it sounds.
+**`ON`/`DIM` semantics**: the admin channel only starts listening after power has already been confirmed, so in practice this is rarely hit — but if an `ON` or `DIM>0` arrives while `tps2378_is_ready()` is false (e.g. power dropped and hasn't returned yet), the command is accepted and the intent is recorded in RAM (never turning the driver on outside the TPS2378's electrical gate) — the response uses the `ACCEPTED_PENDING` status, distinct from `OK`, to make that explicit to the caller. The LED turns on by itself, at the requested brightness, as soon as power is confirmed. A bare `ON` (no brightness) comes up at the last level commanded since boot, or 100% if none. `OFF`/`DIM 0` always apply immediately regardless of power state.
 
-**`DIM`'s ramp**: `DIM`'s payload is `percent` (1 byte) + `ramp_ms` (4 bytes, big-endian). Nothing about brightness is persisted — the LED is off after any reboot and its level comes from the network. High-rate brightness control (effects, music, chases) belongs on the DMX layer (Art-Net/sACN), not on a stream of `DIM` commands: `DIM` still goes through the admin channel's HMAC + nonce + 40-packet/s rate limit.
+**`DIM`'s payload** is `percent` (1 byte) + a legacy `ramp_ms` (4 bytes, big-endian) that the firmware **accepts and ignores** — the driver applies every level at once; smooth fades come from the DMX layer or a lighting console. Nothing about brightness is persisted — the LED is off after any reboot and its level comes from the network. High-rate brightness control (effects, music, chases) belongs on the DMX layer (Art-Net/sACN), not on a stream of `DIM` commands: `DIM` still goes through the admin channel's HMAC + nonce + 40-packet/s rate limit.
 
-Reaching level 0 always asserts the driver's hardware SHUTDOWN pin — PWM duty 0 alone does **not** fully extinguish the HV9910's output, so the pin is the real cut. Going back above 0 releases it again. With a `ramp_ms` of 0 this happens immediately; with a nonzero ramp the PWM duty fades down first and SHUTDOWN is asserted only once that fade genuinely finishes on the LEDC peripheral (a hardware fade-completion callback confirms it, not a wall-clock guess), so a fixture commanded to fade out and then immediately commanded to something else mid-fade never gets stuck partway between the two. An emergency power cut (PoE lost) latches SHUTDOWN asserted until the next explicit `ON`/`DIM` or the power-ready resume path clears it.
+Reaching level 0 in any dimming mode drives the HV9910's PWMD pin to 0 — an RC-filtered LD reference alone cannot fully extinguish the output, so PWMD is the real cut. An emergency power cut (PoE lost) latches PWMD low until the next explicit `ON`/`DIM` or the power-ready resume path clears it.
 
-`FACTORY_RESET` erases the unit's entire NVS partition: the administrative secret (which reverts to the factory default) **and the DMX layer configuration** (`components/dmx_input/`, NVS namespace `"dmx"` — reverts to the disabled default). `hv9910` keeps no NVS state, so there's nothing there to reset — the LED is off after any reboot regardless.
+`FACTORY_RESET` erases the unit's entire NVS partition: the administrative secret (which reverts to the factory default), **the DMX layer configuration** (`components/dmx_input/`, NVS namespace `"dmx"` — reverts to the disabled default), and **the dimming-mode configuration** (`components/driver_config/`, NVS namespace `"driver"` — reverts to the HYBRID default). The `hv9910` component itself keeps no NVS state — the LED is off after any reboot regardless.
 
 ## DMX / Art-Net / sACN layer
 
@@ -79,8 +79,8 @@ All of the protocol / HMAC / AES-GCM / discovery logic lives in a single pure Py
 
 | Module | Contents |
 | --- | --- |
-| `protocol.py` | Constants, `Packet` (serialization/HMAC), identity (MAC/serial), `parse_info_payload()`, `DmxConfig` + `pack_dmx_config()`/`parse_dmx_config()`. |
-| `client.py` | `AdminClient` (one UDP socket per unit; `info/challenge/on/off/dim/identify/reboot/factory_reset/change_secret`, `get_dmx_config`/`set_dmx_config`, `ota_update`), typed exceptions (`DeviceTimeoutError`, `AuthError`, `ProtocolError`/`ProtocolVersionMismatchError`, `CommandRefusedError`, `MissingDependencyError`), `find_working_secret()`/`connect()`. |
+| `protocol.py` | Constants, `Packet` (serialization/HMAC), identity (MAC/serial), `parse_info_payload()`, `DmxConfig` + `pack_dmx_config()`/`parse_dmx_config()`, `DriverConfig` + `pack_driver_config()`/`parse_driver_config()`. |
+| `client.py` | `AdminClient` (one UDP socket per unit; `info/challenge/on/off/dim/identify/reboot/factory_reset/change_secret`, `get_dmx_config`/`set_dmx_config`, `get_driver_config`/`set_driver_config`, `ota_update`), typed exceptions (`DeviceTimeoutError`, `AuthError`, `ProtocolError`/`ProtocolVersionMismatchError`, `CommandRefusedError`, `MissingDependencyError`), `find_working_secret()`/`connect()`. |
 | `discovery.py` | `broadcast_info()`, `resolve_device_by_ip()`, `guess_broadcast_address()`. |
 | `models.py` | `DeviceInfo` (with `power_blocking_reason` and the `dmx_*` status fields), `CommandResult` (`accepted`/`applied`/`pending`, `raise_if_refused()`). |
 | `secrets.py` | `SecretStore` protocol, `KeyfileSecretStore` (RAM-only, from a text file, `candidates()` tries explicit key then each fallback), `MemorySecretStore`, `parse_keys_file()`. |
@@ -115,7 +115,7 @@ Set-Location tools
 python -m webui.app   # or: uvicorn webui.app:app --reload
 ```
 
-Open `http://127.0.0.1:8000/`. It binds localhost and has no operator login of its own — while a keys file is loaded, anything that can reach the port can command the units those keys unlock, so run it on the operator's own machine and don't expose it. Each device card has a **"DMX settings"** button for commissioning the Art-Net/sACN layer and a live DMX status readout.
+Open `http://127.0.0.1:8000/`. It binds localhost and has no operator login of its own — while a keys file is loaded, anything that can reach the port can command the units those keys unlock, so run it on the operator's own machine and don't expose it. Each device card has a **"DMX settings"** button for commissioning the Art-Net/sACN layer (with a live DMX status readout) and a **"Driver settings"** button for the HV9910 dimming mode.
 
 **`tools/webui_demo/`** — a standalone demo UI for presenting the network as a stage: master dimmer, one-fixture-at-a-time identify, pulse/wave scenes, and brightness reactive to a local audio file. It drives fixtures over **Art-Net only** (`tools/webui_demo/artnet.py` streams ArtDmx continuously from a background thread) and does **nothing authenticated** — no admin key at all. It discovers units with an unauthenticated `INFO` broadcast and reads each one's DMX patch (universe / start address / personality / protocols) straight out of that `INFO` response's status block. Commission the fixtures once in the admin WebUI; every scene, the dimmer and the sound-reactive mode are just writes into the Art-Net stream. "Blackout & release" stops the stream; after each fixture's signal-loss timeout the admin channel takes back control.
 
@@ -129,6 +129,22 @@ Open `http://127.0.0.1:8001/`; keep it on a trusted management network.
 
 The reactive-to-sound mode analyzes the whole picked file server-side, once, before playback starts (`tools/webui_demo/audio_reactive.py`: a mel-spaced filterbank, per-band automatic gain, spectral-flux onset/beat detection, and an asymmetric attack/release envelope — see that module's own docstring for the algorithm) — the browser just decodes the file to raw samples, posts them to `/api/music/analyze`, and during playback looks up the precomputed intensity for the current position instead of analyzing anything live.
 
+## Driver / dimming modes
+
+The HV9910 has two dimming inputs wired on this board: **LD** (linear dimming — an analog current reference fed by GPIO33 through a PCB RC/DAC) and **PWMD** (digital dimming — a logic line on GPIO32; driving it low is the real "off"). `components/hv9910/` drives both as LEDC PWM outputs and maps a commanded brightness to the two duties per a runtime-selectable mode. The math is a pure, isolated function in `components/hv9910/hv9910_curve.c` (its file comment carries the continuity proof and the resolution tables).
+
+| Mode | LD | PWMD | Character |
+| --- | --- | --- | --- |
+| **PWM** | held at max | chopped, 1–5 kHz | Perfect photometric linearity, stable colour temperature. Bottom-of-scale resolution ≈ `min_on_time_us × pwm_freq_hz` (a burst is never truncated — below that it snaps to 0). |
+| **Analog** | modulated, 40–80 kHz PWM into the RC | held continuously enabled | Flicker-free, but the comparator offset / ~300 ns propagation delay dominate below ~10 % of nominal current — inaccurate and colour-shifted down there. |
+| **Hybrid** (default) | analog down to `crossover` (default 20 %), then frozen at the crossover value | continuously enabled above the crossover, PWM below it | Analog's freedom from flicker at the top, PWM's depth and accuracy at the bottom, with no visible step at the crossover (light output = commanded level on both sides). |
+
+Reaching level 0 in any mode drives PWMD to 0. There is no fade engine — every level change is instantaneous; smoothing comes from the DMX layer or a lighting console.
+
+Config (mode, the two frequencies, `min_on_time_us`, `crossover_pct`) lives in NVS namespace `"driver"` (`components/driver_config/`, which loads it at boot and pushes it to `hv9910`), and is read/written over the authenticated admin channel (`DRIVER_GET_CONFIG` / `DRIVER_SET_CONFIG`, opcodes `0x10`/`0x11` — additive, no protocol-version change) via the **"Driver settings"** card in `tools/webui/`. `FACTORY_RESET` clears it back to the HYBRID default.
+
+The ESP32 LEDC constraint `freq × 2^bits ≤ 80 MHz` sets the duty resolution per frequency (`pick_duty_res_bits()` in `hv9910.c`): the analog carrier gets 10 bits at 40–60 kHz, 9 bits at 80 kHz; the PWMD carrier gets 13–14 bits at 1–5 kHz. The curve normalises everything to Q16 so the resolution choice is transparent to the math.
+
 ## Board configuration
 
 Hardware-specific parameters live in [main/poe_luminaire_main.h](main/poe_luminaire_main.h): GPIOs, polarities, PHY address, voltage divider, VBUS threshold, and UDP port. Adjust that file before building for a different hardware revision. `DEVID_MODEL_PREFIX` (currently "DriverPoE") is the single source of the product name — it prefixes both the serial (`devid_get_serial()`) and the hostname announced over DHCP (`eth_init`'s `hostname` config); changing that `#define` updates both automatically.
@@ -140,7 +156,7 @@ This board's main configuration:
 | MCU | ESP32 |
 | Ethernet | Internal EMAC, RMII, IP101G PHY (address 1) |
 | PoE | TPS2378; IEEE 802.3af/at or auxiliary power |
-| LED driver | HV9910, 10 kHz PWM |
+| LED driver | HV9910; GPIO33 → RC/DAC → LD (linear dimming), GPIO32 → PWMD (digital dimming). See "Driver / dimming modes". |
 | Minimum VBUS | 40 V |
 | Flash | 4 MB, two OTA partitions |
 | Control ports | UDP 5001 (admin, authenticated), UDP 6454 (Art-Net), UDP 5568 (sACN) |
@@ -172,7 +188,8 @@ python -m unittest discover -s webui_demo/tests -v   # demo route wiring
 | Path | Responsibility |
 | --- | --- |
 | `main/` | Component initialization and integration. |
-| `components/hv9910/` | LED driver brightness and state control. |
+| `components/hv9910/` | HV9910 LED driver: brightness/state control and the LD+PWMD dimming-mode curve (`hv9910_curve.c`). |
+| `components/driver_config/` | Persists the dimming mode (NVS `"driver"`); pushes it to `hv9910`. |
 | `components/tps2378/` | PoE/AUX detection and power validation. |
 | `components/voltage_sense/` | VBUS and LED voltage readings via ADC. |
 | `components/eth_init/` | RMII Ethernet and DHCP. |
@@ -180,7 +197,7 @@ python -m unittest discover -s webui_demo/tests -v   # demo route wiring
 | `components/dmx_input/` | Art-Net + sACN receiver, source merge, and DMX→brightness mapping. |
 | `components/devid/` | Serial, MAC, and administrative secret. |
 | `components/status_leds/` | Board status LEDs. |
-| `tools/device_api/` | Python package: protocol, client, discovery, models, keys, DMX config. |
+| `tools/device_api/` | Python package: protocol, client, discovery, models, keys, DMX + driver config. |
 | `tools/webui/` | Local admin web UI (FastAPI), built on `tools/device_api/`. |
 | `tools/webui_demo/` | Art-Net-only stage-control demo UI (no auth). |
 | `tools/dmxtool/` | Stdlib-only Art-Net/sACN test transmitter. |

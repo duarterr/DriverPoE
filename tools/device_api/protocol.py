@@ -41,7 +41,9 @@ assert HEADER_SIZE == 48, HEADER_SIZE
 
 DEFAULT_PORT = 5001
 DEFAULT_TIMEOUT = 3.0
-DEFAULT_RAMP_MS = 250  # must match HV9910_DEFAULT_RAMP_MS in main/poe_luminaire_main.h
+DEFAULT_RAMP_MS = 250  # filler for the ON/OFF/DIM ramp_ms wire field -- the firmware
+#                        applies every level at once and ignores it (fades belong to
+#                        the DMX layer / console).
 
 # OTA -- must match admin_protocol.h's ADMIN_OTA_* constants exactly.
 OTA_CHUNK_MAX_DATA = 1024  # bytes of image data per OTA_CHUNK packet
@@ -64,6 +66,15 @@ DMX_PERSONALITY_NAMES = {0: "1ch-8bit", 1: "2ch-16bit"}
 DMX_MERGE_NAMES = {0: "HTP", 1: "LTP"}
 DMX_LOSS_NAMES = {0: "hold", 1: "to-black", 2: "to-level"}
 DMX_SOURCE_NAMES = {0: "none", 1: "artnet", 2: "sacn", 3: "both"}
+
+# HV9910 dimming config wire format -- must match DRV_CFG_WIRE_SIZE /
+# driver_config_pack() in components/driver_config/include/driver_config.h.
+# 11 bytes: [0]=layout [1]=mode [2:4]=pwm_freq_hz(u16) [4:8]=analog_freq_hz(u32)
+# [8:10]=min_on_time_us(u16) [10]=crossover_pct, multi-byte fields big-endian.
+DRV_CFG_WIRE_SIZE = 11
+DRV_CFG_LAYOUT_VERSION = 1
+
+DRIVER_MODE_NAMES = {0: "pwm", 1: "analog", 2: "hybrid"}
 
 
 class PacketType(IntEnum):
@@ -97,6 +108,10 @@ class PacketType(IntEnum):
     DMX_GET_CONFIG_RESP = 0x8E
     DMX_SET_CONFIG = 0x0F
     DMX_SET_CONFIG_RESP = 0x8F
+    DRIVER_GET_CONFIG = 0x10
+    DRIVER_GET_CONFIG_RESP = 0x90
+    DRIVER_SET_CONFIG = 0x11
+    DRIVER_SET_CONFIG_RESP = 0x91
     ERR_RESP = 0xFF
 
 
@@ -381,4 +396,46 @@ def parse_dmx_config(payload: bytes) -> DmxConfig:
         loss_timeout_ms=loss_to,
         smoothing_ms=smooth,
         allow_artaddress=bool(allow_aa),
+    )
+
+
+# ======================================================================= #
+# HV9910 dimming config -- must match driver_config_pack()/_unpack() in
+# components/driver_config/driver_config.c exactly (DRV_CFG_WIRE_SIZE
+# bytes, big-endian, leading layout-version byte).
+# ======================================================================= #
+@dataclass
+class DriverConfig:
+    mode: int = 2                # 0 = pwm, 1 = analog, 2 = hybrid
+    pwm_freq_hz: int = 2000      # PWMD switching frequency, 1000..5000
+    analog_freq_hz: int = 60000  # LD (RC-fed) PWM frequency, 40000..80000
+    min_on_time_us: int = 20     # PWMD minimum conduction burst, 2..200
+    crossover_pct: int = 20      # hybrid knee, 10..60
+
+
+def pack_driver_config(cfg: DriverConfig) -> bytes:
+    return struct.pack(
+        ">BBHIHB",
+        DRV_CFG_LAYOUT_VERSION,
+        cfg.mode & 0xFF,
+        cfg.pwm_freq_hz & 0xFFFF,
+        cfg.analog_freq_hz & 0xFFFFFFFF,
+        cfg.min_on_time_us & 0xFFFF,
+        cfg.crossover_pct & 0xFF,
+    )
+
+
+def parse_driver_config(payload: bytes) -> DriverConfig:
+    if len(payload) != DRV_CFG_WIRE_SIZE:
+        raise ProtocolError(
+            f"unexpected driver config size: {len(payload)} (expected {DRV_CFG_WIRE_SIZE})")
+    version, mode, pwm_hz, analog_hz, min_on_us, xover = struct.unpack(">BBHIHB", payload)
+    if version != DRV_CFG_LAYOUT_VERSION:
+        raise ProtocolError(f"unsupported driver config layout version {version}")
+    return DriverConfig(
+        mode=mode,
+        pwm_freq_hz=pwm_hz,
+        analog_freq_hz=analog_hz,
+        min_on_time_us=min_on_us,
+        crossover_pct=xover,
     )

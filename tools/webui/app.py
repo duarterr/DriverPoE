@@ -58,8 +58,10 @@ from device_api.protocol import (
     DEFAULT_PORT,
     DEFAULT_RAMP_MS,
     DEFAULT_TIMEOUT,
+    DRIVER_MODE_NAMES,
     SECRET_LEN,
     DmxConfig,
+    DriverConfig,
     ProtocolVersionMismatchError,
 )
 from device_api.secrets import ADMIN_DEFAULT_SECRET, KeyfileSecretStore, KeysFileError
@@ -142,6 +144,17 @@ def _dmx_to_dict(cfg: DmxConfig) -> dict[str, Any]:
         "loss_timeout_ms": cfg.loss_timeout_ms,
         "smoothing_ms": cfg.smoothing_ms,
         "allow_artaddress": cfg.allow_artaddress,
+    }
+
+
+def _driver_to_dict(cfg: DriverConfig) -> dict[str, Any]:
+    return {
+        "mode": cfg.mode,
+        "mode_name": DRIVER_MODE_NAMES.get(cfg.mode, str(cfg.mode)),
+        "pwm_freq_hz": cfg.pwm_freq_hz,
+        "analog_freq_hz": cfg.analog_freq_hz,
+        "min_on_time_us": cfg.min_on_time_us,
+        "crossover_pct": cfg.crossover_pct,
     }
 
 
@@ -254,6 +267,15 @@ class DmxConfigRequest(BaseModel):
     loss_timeout_ms: int = 3000
     smoothing_ms: int = 25
     allow_artaddress: bool = True
+    secret_hex: str | None = None
+
+
+class DriverConfigRequest(BaseModel):
+    mode: int = 2                # 0 pwm, 1 analog, 2 hybrid
+    pwm_freq_hz: int = 2000
+    analog_freq_hz: int = 60000
+    min_on_time_us: int = 20
+    crossover_pct: int = 20
     secret_hex: str | None = None
 
 
@@ -528,6 +550,41 @@ def api_dmx_set(ip: str, body: DmxConfigRequest, port: int = DEFAULT_PORT):
     except Exception as e:
         return _error_response(e)
     return {**_result_to_dict(result), "config": _dmx_to_dict(applied)}
+
+
+# ======================================================================= #
+# HV9910 dimming mode
+# ======================================================================= #
+@app.get("/api/devices/{ip}/driver")
+def api_driver_get(ip: str, port: int = DEFAULT_PORT, secret_hex: str | None = None):
+    try:
+        with AdminClient(ip, port, DEFAULT_TIMEOUT) as client:
+            info = client.info()
+            secret = _resolve_secret(client, info.serial, secret_hex)
+            cfg = client.get_driver_config(secret, info.serial)
+    except Exception as e:
+        return _error_response(e)
+    return _driver_to_dict(cfg)
+
+
+@app.post("/api/devices/{ip}/driver")
+def api_driver_set(ip: str, body: DriverConfigRequest, port: int = DEFAULT_PORT):
+    cfg = DriverConfig(
+        mode=body.mode,
+        pwm_freq_hz=body.pwm_freq_hz,
+        analog_freq_hz=body.analog_freq_hz,
+        min_on_time_us=body.min_on_time_us,
+        crossover_pct=body.crossover_pct,
+    )
+    try:
+        with AdminClient(ip, port, DEFAULT_TIMEOUT) as client:
+            info = client.info()
+            secret = _resolve_secret(client, info.serial, body.secret_hex)
+            result = client.set_driver_config(secret, info.serial, cfg)
+            applied = client.get_driver_config(secret, info.serial) if result.applied else cfg
+    except Exception as e:
+        return _error_response(e)
+    return {**_result_to_dict(result), "config": _driver_to_dict(applied)}
 
 
 # ======================================================================= #

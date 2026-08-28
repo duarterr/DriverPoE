@@ -7,61 +7,89 @@
  * level, the driver comes up at the last level commanded THIS boot
  * (volatile, RAM only), or at 100% if nothing has set a level yet.
  *
- * SHUTDOWN follows the level: PWM duty 0 does NOT fully extinguish the
- * HV9910's output, so whenever the commanded level reaches 0 the hardware
- * SHUTDOWN pin is asserted (immediately for a 0 ramp, on fade completion
- * for a ramp) and released again when the level goes back above 0. The
- * TPS2378 power gate is the caller's job -- nothing here checks it.
+ * Two hardware signals, both PWM outputs:
+ *   - LD   (GPIO to an RC/DAC on the PCB -> HV9910 linear-dimming input):
+ *     analog current reference. Flicker-free; inaccurate below ~10%; never
+ *     reaches true zero.
+ *   - PWMD (logic line -> HV9910 digital-dimming input): gates the driver.
+ *     Duty 0 is the real "off". Chopping it gives linear photometry and a
+ *     stable colour temperature.
+ *
+ * Three runtime-selectable dimming modes (see hv9910_curve.h): PWM,
+ * ANALOG, HYBRID. The mode and its parameters are supplied by another
+ * module via hv9910_set_dimming() -- this component keeps nothing on
+ * flash. Reaching level 0 in any mode drives PWMD to 0 (an RC-filtered LD
+ * alone cannot extinguish the output).
+ *
+ * There is no fade/ramp engine: every level change is applied at once.
+ * Smooth transitions are the job of whatever is driving (a DMX console,
+ * the DMX layer). The TPS2378 power gate is the caller's job -- nothing
+ * here checks it.
  */
 #pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
 #include "driver/gpio.h"
+#include "hv9910_curve.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/** @brief HV9910 driver configuration. */
+/** @brief HV9910 board wiring (static; set once at hv9910_init()). */
 typedef struct {
-    gpio_num_t shutdown_pin;   /**< Enable GPIO. */
-    gpio_num_t dimming_pin;    /**< Dimming PWM GPIO. */
-    bool shutdown_active_high; /**< Enable pin polarity. */
-    bool dim_active_high;      /**< PWM pin polarity. */
-    uint32_t pwm_freq_hz;      /**< PWM frequency. */
-    uint32_t max_ramp_ms;      /**< Ramp duration ceiling, in ms. */
+    gpio_num_t pwmd_pin;   /**< HV9910 PWMD (digital dimming) GPIO. */
+    gpio_num_t ld_pin;     /**< HV9910 LD (linear dimming, via RC) GPIO. */
+    bool pwmd_invert;      /**< LEDC output_invert for PWMD. */
+    bool ld_invert;        /**< LEDC output_invert for LD. */
 } hv9910_config_t;
+
+/** @brief Runtime dimming configuration (from driver_config; volatile here). */
+typedef struct {
+    uint8_t  mode;           /**< hv9910_dim_mode_t. */
+    uint16_t pwm_freq_hz;    /**< PWMD switching frequency, 1000..5000. */
+    uint32_t analog_freq_hz; /**< LD (RC-fed) PWM frequency, 40000..80000. */
+    uint16_t min_on_time_us; /**< PWMD minimum conduction burst, 2..200. */
+    uint8_t  crossover_pct;  /**< HYBRID knee, 10..60. */
+} hv9910_dimming_t;
 
 /**
  * @brief Initializes the driver in the disabled state (LED off).
- * @param config GPIOs, polarities, and limits.
+ * @param config Board wiring.
  * @return None.
  */
 void hv9910_init(const hv9910_config_t *config);
 
 /**
+ * @brief Selects the dimming mode and its parameters. Reconfigures the
+ * LEDC timers and re-renders the current level under the new curve. Safe
+ * to call repeatedly; a brief (sub-ms) output glitch during the LEDC
+ * reconfigure is accepted.
+ * @param p Mode + frequencies + min-on-time + crossover. Copied.
+ * @return None.
+ */
+void hv9910_set_dimming(const hv9910_dimming_t *p);
+
+/**
  * @brief Enables the driver at the last level commanded this boot, or at
  * 100% if no level has been set yet.
- * @param ramp_ms Ramp duration in ms.
  * @return None.
  */
-void hv9910_enable(uint32_t ramp_ms);
+void hv9910_enable(void);
 
 /**
- * @brief Enables the driver, ramping to an explicit brightness.
+ * @brief Enables the driver at an explicit brightness.
  * @param percent Target brightness, 0-100.
- * @param ramp_ms Ramp duration in ms.
  * @return None.
  */
-void hv9910_enable_at(uint8_t percent, uint32_t ramp_ms);
+void hv9910_enable_at(uint8_t percent);
 
 /**
- * @brief Disables the driver after ramping the brightness down.
- * @param ramp_ms Ramp duration in ms.
+ * @brief Disables the driver (PWMD to 0).
  * @return None.
  */
-void hv9910_disable(uint32_t ramp_ms);
+void hv9910_disable(void);
 
 /**
  * @brief Disables the driver immediately, with priority over queued
@@ -81,23 +109,20 @@ void hv9910_emergency_disable(void);
 bool hv9910_pending_on(void);
 
 /**
- * @brief Reports whether the LED is currently lit (SHUTDOWN released and
- * duty > 0).
+ * @brief Reports whether the LED is currently lit.
  * @return true if the LED is on.
  */
 bool hv9910_is_enabled(void);
 
 /**
- * @brief Sets the LED brightness (never touches NVS). >0 releases
- * SHUTDOWN and lights the LED; 0 asserts SHUTDOWN and turns it off (after
- * the ramp, if any). A nonzero value is also remembered as the volatile
- * "last level" for a later bare hv9910_enable(). Does NOT touch the
- * network's on/off desire (hv9910_pending_on()).
+ * @brief Sets the LED brightness (never touches NVS). Applied at once. A
+ * nonzero value is also remembered as the volatile "last level" for a
+ * later bare hv9910_enable(). Does NOT touch the network's on/off desire
+ * (hv9910_pending_on()).
  * @param percent Brightness, 0-100.
- * @param ramp_ms Ramp duration in ms.
  * @return None.
  */
-void hv9910_set_dim(uint8_t percent, uint32_t ramp_ms);
+void hv9910_set_dim(uint8_t percent);
 
 /**
  * @brief Runs the visual identify blink sequence.
@@ -118,13 +143,13 @@ void hv9910_identify(void);
 void hv9910_set_pending(bool on, uint8_t remember_pct);
 
 /**
- * @brief Reports whether a ramp or identify blink is currently in progress.
+ * @brief Reports whether an identify blink is currently in progress.
  * @return true if a deferred action is pending.
  */
 bool hv9910_is_ramp_pending(void);
 
 /**
- * @brief Gets the currently requested brightness.
+ * @brief Gets the currently applied brightness.
  * @return Brightness, 0-100.
  */
 uint8_t hv9910_get_dim_percent(void);

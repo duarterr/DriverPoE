@@ -77,7 +77,7 @@ typedef struct {
     uint8_t  loss_behavior;        /**< dmx_loss_behavior_t. */
     uint8_t  loss_level;           /**< 0..100, used by DMX_LOSS_TO_LEVEL. */
     uint16_t loss_timeout_ms;      /**< Per-source inactivity before "lost". */
-    uint16_t smoothing_ms;         /**< Inter-frame fade per update (default 25 ~= 1 frame; 0 = track every frame). */
+    uint16_t smoothing_ms;         /**< Advisory / unused: the hv9910 driver applies every level at once (fades come from the console). Kept in the wire format for compatibility. */
     uint8_t  allow_artaddress;     /**< Honor Art-Net ArtAddress from the wire. */
 } dmx_input_config_t;
 

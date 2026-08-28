@@ -273,6 +273,40 @@
   </form>
 </dialog>
 
+<dialog id="driverDialog">
+  <form method="dialog" onsubmit="return false">
+    <h2 style="margin:0 0 4px;font-size:16px;" id="driverDialogTitle">Driver settings</h2>
+    <div class="sub" style="color:var(--muted);font-size:12px;margin-bottom:10px;">
+      HV9910 dimming strategy. The device clamps out-of-range values. Every level change is
+      applied at once -- fades come from the DMX layer / console.
+    </div>
+    <div class="dmx-form">
+      <label class="full">Dimming mode
+        <select id="drv-mode">
+          <option value="2">Hybrid - analog above the crossover, PWM below</option>
+          <option value="1">Analog - modulate LD, flicker-free, loses accuracy below ~10%</option>
+          <option value="0">PWM - chop PWMD, linear photometry, stable colour temp</option>
+        </select>
+      </label>
+
+      <h4>PWM path (PWMD)</h4>
+      <label>Frequency (Hz, 1000-5000)<input type="number" id="drv-pwm_freq_hz" min="1000" max="5000" step="100"></label>
+      <label>Min on-time (us, 2-200)<input type="number" id="drv-min_on_time_us" min="2" max="200"></label>
+
+      <h4>Analog path (LD)</h4>
+      <label>Frequency (Hz, 40000-80000)<input type="number" id="drv-analog_freq_hz" min="40000" max="80000" step="1000"></label>
+
+      <h4>Hybrid</h4>
+      <label>Crossover (% of output, 10-60)<input type="number" id="drv-crossover_pct" min="10" max="60"></label>
+    </div>
+    <div id="driverDialogMsg" style="margin-top:8px;font-size:12px;color:var(--muted);"></div>
+    <div class="actions" style="margin-top:12px;">
+      <button type="button" class="btn" onclick="document.getElementById('driverDialog').close()">Cancel</button>
+      <button type="button" id="driverDialogSave" class="btn-accent">Save to device</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
 // ----------------------------------------------------------------------
 // No protocol/HMAC/secret logic here -- this page only ever calls the
@@ -446,6 +480,33 @@ function dmxCfgRows(ip, d) {
        + row('Accept ArtAddress', cfg.allow_artaddress ? pill('yes', 'on') : pill('no', 'off'));
 }
 
+// HV9910 dimming config -- same lazy authenticated cache as dmxCfgCache.
+const driverCfgCache = {};
+const DRIVER_MODE = { 0: 'PWM', 1: 'Analog', 2: 'Hybrid' };
+
+async function loadDriverCfg(ip) {
+  if (driverCfgCache[ip] !== undefined) return;
+  driverCfgCache[ip] = 'loading';
+  try {
+    const resp = await fetch(`/api/devices/${ip}/driver`);
+    driverCfgCache[ip] = resp.ok ? await resp.json() : 'unavailable';
+  } catch (e) {
+    driverCfgCache[ip] = 'unavailable';
+  }
+  renderDevices();
+}
+
+function driverCfgRows(ip) {
+  const cfg = driverCfgCache[ip];
+  if (cfg === undefined) { loadDriverCfg(ip); return row('Config', '<span class="label">loading…</span>'); }
+  if (cfg === 'loading') return row('Config', '<span class="label">loading…</span>');
+  if (cfg === 'unavailable') return row('Config', '<span class="label">needs an admin key</span>');
+  return row('Dimming mode', pill(DRIVER_MODE[cfg.mode] ?? cfg.mode_name ?? cfg.mode, 'on'))
+       + row('PWM path', `${cfg.pwm_freq_hz} Hz, min on-time ${cfg.min_on_time_us} us`)
+       + row('Analog path', `${cfg.analog_freq_hz} Hz`)
+       + row('Hybrid crossover', `${cfg.crossover_pct}%`);
+}
+
 function renderDevices() {
   const el = document.getElementById('devices');
   if (!devices.length) {
@@ -530,6 +591,14 @@ function renderDevices() {
         ${dmxCfgRows(d.source_ip, d)}
       </div>
       <div class="center-row"><button class="btn" onclick="openDmxDialog(${i})">DMX settings</button></div>
+
+      <hr class="divider">
+
+      <div class="section-label">Driver settings</div>
+      <div class="info">
+        ${driverCfgRows(d.source_ip)}
+      </div>
+      <div class="center-row"><button class="btn" onclick="openDriverDialog(${i})">Driver settings</button></div>
 
       <hr class="divider">
 
@@ -659,6 +728,7 @@ async function scanDevices() {
     const data = await resp.json();
     devices = data.devices || [];
     for (const k of Object.keys(dmxCfgCache)) delete dmxCfgCache[k];  // re-fetch config fresh each scan
+    for (const k of Object.keys(driverCfgCache)) delete driverCfgCache[k];
     // indices are only meaningful within one scan's result set -- default
     // to "everything just found" selected, since bulk actions are the
     // common next step right after a scan.
@@ -887,6 +957,81 @@ document.getElementById('dmxDialogSave').addEventListener('click', async () => {
       await refreshOne(i);
       if (data.applied) showMsg(i, 'DMX config saved.', true);
       else showMsg(i, `DMX config refused (${data.status}).`, false);
+      return;
+    }
+    if (status === 401 && data.error === 'auth_needed' && attempt === 0) {
+      secretHex = await promptForSecret(`No known admin secret works for ${d.serial}. Enter one to try:`);
+      if (!secretHex) { msg.textContent = 'Cancelled -- no secret provided.'; return; }
+      continue;
+    }
+    msg.textContent = data.message || `Save failed (HTTP ${status}).`;
+    return;
+  }
+});
+
+// Driver settings -- HV9910 dimming mode. Same modal + auth-retry pattern
+// as the DMX dialog above.
+let driverDialogIndex = null;
+
+async function openDriverDialog(i) {
+  const d = devices[i];
+  driverDialogIndex = i;
+  const dlg = document.getElementById('driverDialog');
+  const msg = document.getElementById('driverDialogMsg');
+  document.getElementById('driverDialogTitle').textContent = `Driver settings - ${d.serial}`;
+  msg.textContent = 'Loading current config from the device...';
+  dlg.showModal();
+
+  let secretHex = null;
+  let cfg = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const q = secretHex ? `?secret_hex=${encodeURIComponent(secretHex)}` : '';
+    const resp = await fetch(`/api/devices/${d.source_ip}/driver${q}`);
+    const data = await resp.json().catch(() => ({}));
+    if (resp.ok) { cfg = data; driverCfgCache[d.source_ip] = data; break; }
+    if (resp.status === 401 && data.error === 'auth_needed' && attempt === 0) {
+      secretHex = await promptForSecret(`No known admin secret works for ${d.serial}. Enter one to try:`);
+      if (!secretHex) { msg.textContent = 'Cancelled -- no secret provided.'; return; }
+      continue;
+    }
+    msg.textContent = data.message || `Failed to load driver config (HTTP ${resp.status}).`;
+    return;
+  }
+  if (!cfg) return;
+
+  const set = (id, v) => { document.getElementById(id).value = v; };
+  set('drv-mode', cfg.mode);
+  set('drv-pwm_freq_hz', cfg.pwm_freq_hz);
+  set('drv-min_on_time_us', cfg.min_on_time_us);
+  set('drv-analog_freq_hz', cfg.analog_freq_hz);
+  set('drv-crossover_pct', cfg.crossover_pct);
+  msg.textContent = '';
+}
+
+document.getElementById('driverDialogSave').addEventListener('click', async () => {
+  const i = driverDialogIndex;
+  if (i === null) return;
+  const d = devices[i];
+  const msg = document.getElementById('driverDialogMsg');
+  const num = (id) => parseInt(document.getElementById(id).value, 10) || 0;
+  const base = {
+    mode: num('drv-mode'),
+    pwm_freq_hz: num('drv-pwm_freq_hz'),
+    min_on_time_us: num('drv-min_on_time_us'),
+    analog_freq_hz: num('drv-analog_freq_hz'),
+    crossover_pct: num('drv-crossover_pct'),
+  };
+
+  let secretHex = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const body = Object.assign({}, base, secretHex ? { secret_hex: secretHex } : {});
+    const { ok, status, data } = await postJson(`/api/devices/${d.source_ip}/driver`, body);
+    if (ok) {
+      document.getElementById('driverDialog').close();
+      if (data.config) driverCfgCache[d.source_ip] = data.config;
+      await refreshOne(i);
+      if (data.applied) showMsg(i, 'Driver config saved.', true);
+      else showMsg(i, `Driver config refused (${data.status}).`, false);
       return;
     }
     if (status === 401 && data.error === 'auth_needed' && attempt === 0) {

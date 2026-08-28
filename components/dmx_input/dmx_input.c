@@ -81,9 +81,7 @@ static void config_defaults(dmx_input_config_t *c)
     c->loss_behavior = DMX_LOSS_HOLD;
     c->loss_level = 0;
     c->loss_timeout_ms = 3000;
-    /* ~1 frame: bridges the odd dropped datagram invisibly without adding
-     * perceptible lag to a console fade. 0 = follow every frame exactly. */
-    c->smoothing_ms = 25;
+    c->smoothing_ms = 25;   /* advisory / unused (see dmx_input.h) -- kept for wire compatibility */
     c->allow_artaddress = 1;
 }
 
@@ -422,14 +420,14 @@ static void merge_tick(void)
          * stop driving so the admin channel regains control. */
         if (!s_loss_applied && s_last_applied_pct >= 0) {
             if (cfg.loss_behavior == DMX_LOSS_TO_BLACK) {
-                hv9910_disable(cfg.smoothing_ms);
+                hv9910_disable();
             } else if (cfg.loss_behavior == DMX_LOSS_TO_LEVEL) {
                 if (cfg.loss_level == 0) {
-                    hv9910_disable(cfg.smoothing_ms);
+                    hv9910_disable();
                 } else if (hv9910_is_enabled()) {
-                    hv9910_set_dim(cfg.loss_level, cfg.smoothing_ms);
+                    hv9910_set_dim(cfg.loss_level);
                 } else {
-                    hv9910_enable_at(cfg.loss_level, cfg.smoothing_ms);
+                    hv9910_enable_at(cfg.loss_level);
                 }
             } /* DMX_LOSS_HOLD: leave the driver where it is */
             ESP_LOGI(TAG, "DMX signal lost -- loss behavior %u applied, releasing control", cfg.loss_behavior);
@@ -481,11 +479,11 @@ static void merge_tick(void)
     if ((pct != s_last_applied_pct || s_last_applied_pct < 0) && due) {
         if (tps2378_is_ready()) {
             if (hv9910_is_enabled()) {
-                /* set_dim drives SHUTDOWN too: pct 0 asserts it after the
-                 * fade (PWM duty 0 alone does not extinguish the HV9910). */
-                hv9910_set_dim(pct, cfg.smoothing_ms);
+                /* set_dim follows the level: pct 0 drives PWMD low (an
+                 * RC-filtered LD alone cannot extinguish the HV9910). */
+                hv9910_set_dim(pct);
             } else if (pct > 0) {
-                hv9910_enable_at(pct, cfg.smoothing_ms);
+                hv9910_enable_at(pct);
             }
             /* pct == 0 with the driver off: stay dark, nothing to do. */
             s_last_applied_pct = pct;

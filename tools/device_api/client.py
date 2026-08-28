@@ -24,11 +24,14 @@ from .protocol import (
     ZERO_NONCE,
     AdminStatus,
     DmxConfig,
+    DriverConfig,
     Packet,
     PacketType,
     ProtocolError,
     pack_dmx_config,
+    pack_driver_config,
     parse_dmx_config,
+    parse_driver_config,
     parse_info_payload,
     status_byte,
 )
@@ -328,6 +331,25 @@ class AdminClient:
         return self._write_command("DMX_SET_CONFIG", PacketType.DMX_SET_CONFIG,
                                     PacketType.DMX_SET_CONFIG_RESP, serial, key, nonce,
                                     pack_dmx_config(cfg))
+
+    # -- HV9910 dimming config ---------------------------------------------
+    def get_driver_config(self, key: bytes, serial: str) -> DriverConfig:
+        """Reads the HV9910 dimming-mode configuration (authenticated)."""
+        nonce = self.challenge(key, serial)
+        pkt = Packet(type=PacketType.DRIVER_GET_CONFIG, serial=serial, nonce=nonce, payload=b"")
+        self._send(pkt, key)
+        resp = self._recv()
+        if resp.type != PacketType.DRIVER_GET_CONFIG_RESP or not resp.verify_hmac(key):
+            raise ProtocolError("invalid or unauthenticated response to DRIVER_GET_CONFIG")
+        return parse_driver_config(resp.payload)
+
+    def set_driver_config(self, key: bytes, serial: str, cfg: DriverConfig) -> CommandResult:
+        """Writes (and persists) the dimming-mode configuration. The device
+        clamps out-of-range fields."""
+        nonce = self.challenge(key, serial)
+        return self._write_command("DRIVER_SET_CONFIG", PacketType.DRIVER_SET_CONFIG,
+                                    PacketType.DRIVER_SET_CONFIG_RESP, serial, key, nonce,
+                                    pack_driver_config(cfg))
 
 
 def find_working_secret(client: AdminClient, serial: str, store: SecretStore,

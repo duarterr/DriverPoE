@@ -7,24 +7,28 @@
  * No NVS: every bit of state here is volatile. The luminaire always boots
  * with the LED off. The on-level comes from the network (DMX or admin);
  * a bare ON uses the last level commanded this boot, or 100% if none.
+ *
+ * Two LEDC outputs -- LD (GPIO -> RC/DAC -> HV9910 linear dimming) and
+ * PWMD (logic line -> HV9910 digital dimming). hv9910_curve.c maps a
+ * commanded brightness to both duties per the selected mode; PWMD at 0 is
+ * the real "off". No fade engine: every change is applied at once.
  */
 #include "hv9910.h"
+#include "hv9910_curve.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
-#include "esp_attr.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
-#include <inttypes.h>
 
 static const char *TAG = "HV9910";
 
-#define LEDC_SPEED_MODE   LEDC_LOW_SPEED_MODE
-#define LEDC_TIMER        LEDC_TIMER_0
-#define LEDC_CHANNEL      LEDC_CHANNEL_0
-#define LEDC_DUTY_RES     LEDC_TIMER_10_BIT
-#define LEDC_DUTY_MAX     ((1 << 10) - 1)
+#define LEDC_MODE        LEDC_LOW_SPEED_MODE
+#define LD_TIMER         LEDC_TIMER_0
+#define LD_CHANNEL       LEDC_CHANNEL_0
+#define PWMD_TIMER       LEDC_TIMER_1
+#define PWMD_CHANNEL     LEDC_CHANNEL_1
 
 #define DEFAULT_ON_PERCENT   100  /**< Level for a bare ON when nothing has set one yet. */
 
@@ -38,43 +42,40 @@ static const char *TAG = "HV9910";
 
 static hv9910_config_t s_config;
 
-/**
- * @brief GPIO level that asserts (disables) SHUTDOWN for the configured polarity.
- * @return GPIO level.
- */
-static int shutdown_assert_level(void) { return s_config.shutdown_active_high ? 1 : 0; }
+/* --- runtime dimming config (from driver_config; volatile) --------------- */
+static hv9910_dimming_t s_dimming;
+static uint32_t s_crossover_q   = HV9910_Q_ONE / 5;   /* derived from crossover_pct */
+static uint32_t s_min_on_frac_q = 0;                  /* derived from min_on_time_us x pwm_freq_hz */
+static uint32_t s_ld_full   = 1u << 10;               /* LEDC duty for 100% on the LD timer */
+static uint32_t s_pwmd_full = 1u << 10;               /* LEDC duty for 100% on the PWMD timer */
 
-/**
- * @brief GPIO level that releases (enables) SHUTDOWN for the configured polarity.
- * @return GPIO level.
- */
-static int shutdown_run_level(void)    { return s_config.shutdown_active_high ? 0 : 1; }
-
-static volatile bool s_enabled = false;              /* SHUTDOWN released and duty > 0 -- i.e. LED lit */
-static volatile uint8_t s_dim_percent = 0;
+/* --- driver state ------------------------------------------------------- */
+static volatile bool s_enabled = false;              /* LED currently lit */
+static volatile uint8_t s_dim_percent = 0;           /* last rendered level, 0..100 */
+static uint32_t s_level_q = 0;                        /* last rendered level, Q16 (authoritative) */
 static volatile uint8_t s_last_nonzero_percent = 0;  /* 0 = no level set this boot */
 static volatile bool s_desired_on = false;           /* network's last on/off desire; survives a power blip */
-static volatile bool s_power_cut = false;            /* set by EMERGENCY_OFF; blocks SET_DIM from re-releasing
-                                                        SHUTDOWN until an explicit ENABLE clears it */
+static volatile bool s_power_cut = false;            /* set by EMERGENCY_OFF; blocks re-lighting until an
+                                                        explicit ENABLE clears it */
 static bool s_ledc_started = false;
 
 /** @brief Command types accepted by hv9910_task. */
 typedef enum {
-    HV_CMD_ENABLE,            /**< Clear the power-cut latch, set s_desired_on, ramp to cmd.percent. */
+    HV_CMD_ENABLE,         /**< Clear the power-cut latch, set s_desired_on, apply cmd.percent. */
     HV_CMD_DISABLE,
-    HV_CMD_SET_DIM,           /**< Set the level; SHUTDOWN follows it (0 -> off, >0 -> lit). */
+    HV_CMD_SET_DIM,        /**< Set the level (PWMD follows it: 0 -> off, >0 -> lit). */
     HV_CMD_IDENTIFY,
-    HV_CMD_SET_PENDING,       /**< Record cmd.on (+ optionally cmd.percent as the last level); no hardware change. */
-    HV_CMD_EMERGENCY_OFF,     /**< Assert SHUTDOWN now, latch it; leave s_desired_on untouched. */
-    HV_CMD_FADE_TO_ZERO_DONE, /**< Internal only, posted by hv_fade_end_cb() -- never sent by post_cmd() callers. */
+    HV_CMD_SET_PENDING,    /**< Record cmd.on (+ optionally cmd.percent as the last level); no hardware change. */
+    HV_CMD_EMERGENCY_OFF,  /**< Force PWMD to 0 now, latch it; leave s_desired_on untouched. */
+    HV_CMD_APPLY_DIMMING,  /**< Adopt cmd.dim: reconfigure LEDC, re-render the current level. */
 } hv9910_cmd_type_t;
 
 /** @brief One queued command for hv9910_task. */
 typedef struct {
     hv9910_cmd_type_t type; /**< Command type. */
-    uint32_t ramp_ms;       /**< Ramp duration, for ENABLE/DISABLE/SET_DIM. */
     uint8_t percent;        /**< Brightness, for ENABLE/SET_DIM; level to remember for SET_PENDING. */
     bool on;                /**< Desired state, for SET_PENDING. */
+    hv9910_dimming_t dim;   /**< Valid only for APPLY_DIMMING. */
 } hv9910_cmd_t;
 
 static QueueHandle_t s_cmd_queue;
@@ -89,63 +90,90 @@ typedef enum {
 static volatile pending_action_t s_pending = PENDING_NONE;
 static TickType_t s_pending_deadline;
 
-/** @brief True while a fade-to-0 from hv_do_disable() is in flight; its completion
- * (hv_fade_end_cb) asserts SHUTDOWN. Cleared by any other dim/enable call so a
- * superseded fade can't fire a stale shutdown. */
-static volatile bool s_awaiting_shutdown_fade = false;
-
 static int s_identify_steps_left;
 static bool s_identify_next_is_on;
 static bool s_identify_saved_enabled;
 static bool s_identify_saved_desired;
-static uint8_t s_identify_saved_dim;
+static uint32_t s_identify_saved_level_q;
 
 /**
- * @brief Writes the SHUTDOWN GPIO level.
- * @param level GPIO level to write.
+ * @brief Recomputes the Q16 values derived from s_dimming.
  * @return None.
  */
-static void shutdown_write(int level)
+static void recompute_derived(void)
 {
-    gpio_set_level(s_config.shutdown_pin, level);
+    s_crossover_q = ((uint32_t)s_dimming.crossover_pct * HV9910_Q_ONE) / 100u;
+
+    uint64_t frac = ((uint64_t)s_dimming.min_on_time_us * s_dimming.pwm_freq_hz * HV9910_Q_ONE) / 1000000ULL;
+    s_min_on_frac_q = (frac > HV9910_Q_ONE) ? HV9910_Q_ONE : (uint32_t)frac;
 }
 
 /**
- * @brief Clamps a requested ramp duration to the configured maximum.
- * @param ramp_ms Requested ramp duration in ms.
- * @return Clamped ramp duration in ms.
+ * @brief Picks the LEDC duty resolution (bits) for a PWM frequency, so
+ * that freq * 2^bits stays within the 80 MHz APB limit.
+ * @param freq_hz PWM frequency.
+ * @return Duty resolution in bits (4..14).
  */
-static uint32_t clamp_ramp_ms(uint32_t ramp_ms)
+static uint32_t pick_duty_res_bits(uint32_t freq_hz)
 {
-    if (ramp_ms > s_config.max_ramp_ms) {
-        ESP_LOGW(TAG, "ramp_ms=%" PRIu32 " exceeds the configured max (%" PRIu32 ") -- clamping",
-                 ramp_ms, s_config.max_ramp_ms);
-        return s_config.max_ramp_ms;
+    if (freq_hz == 0) {
+        freq_hz = 1;
     }
-    return ramp_ms;
+    uint32_t ratio = 80000000u / freq_hz;   /* f_APB / f */
+    uint32_t bits = 4;
+    while (bits < 14 && (1u << (bits + 1)) <= ratio) {
+        bits++;
+    }
+    return bits;
 }
 
 /**
- * @brief LEDC fade-end ISR callback; posts HV_CMD_FADE_TO_ZERO_DONE if this
- * fade is the one hv_do_disable() is waiting on.
- * @param param Fade event info.
- * @param user_arg Unused.
- * @return true if a higher-priority task was woken.
+ * @brief Scales a Q16 fraction (0..HV9910_Q_ONE) to an LEDC duty
+ * (0..full), with round-to-nearest. full == HV9910_Q_ONE maps to `full`,
+ * which the LEDC treats as constant-on.
+ * @param q Fraction.
+ * @param full LEDC duty for 100%.
+ * @return LEDC duty.
  */
-static bool IRAM_ATTR hv_fade_end_cb(const ledc_cb_param_t *param, void *user_arg)
+static uint32_t scale_duty(uint32_t q, uint32_t full)
 {
-    (void)user_arg;
-    BaseType_t woken = pdFALSE;
-    if (param->event == LEDC_FADE_END_EVT && s_awaiting_shutdown_fade) {
-        s_awaiting_shutdown_fade = false;
-        hv9910_cmd_t cmd = { .type = HV_CMD_FADE_TO_ZERO_DONE };
-        xQueueSendFromISR(s_cmd_queue, &cmd, &woken);
-    }
-    return woken == pdTRUE;
+    return (uint32_t)(((uint64_t)q * full + (HV9910_Q_ONE >> 1)) >> HV9910_Q_BITS);
 }
 
 /**
- * @brief Configures the LEDC timer/channel and installs the fade service, once.
+ * @brief (Re)configures both LEDC timers for the current s_dimming
+ * frequencies and refreshes s_ld_full / s_pwmd_full.
+ * @return None.
+ */
+static void reconfigure_ledc(void)
+{
+    uint32_t ld_bits   = pick_duty_res_bits(s_dimming.analog_freq_hz);
+    uint32_t pwmd_bits = pick_duty_res_bits(s_dimming.pwm_freq_hz);
+
+    ledc_timer_config_t ld_t = {
+        .speed_mode = LEDC_MODE,
+        .timer_num = LD_TIMER,
+        .duty_resolution = (ledc_timer_bit_t)ld_bits,
+        .freq_hz = s_dimming.analog_freq_hz,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    ESP_ERROR_CHECK(ledc_timer_config(&ld_t));
+
+    ledc_timer_config_t pwmd_t = {
+        .speed_mode = LEDC_MODE,
+        .timer_num = PWMD_TIMER,
+        .duty_resolution = (ledc_timer_bit_t)pwmd_bits,
+        .freq_hz = s_dimming.pwm_freq_hz,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    ESP_ERROR_CHECK(ledc_timer_config(&pwmd_t));
+
+    s_ld_full   = 1u << ld_bits;
+    s_pwmd_full = 1u << pwmd_bits;
+}
+
+/**
+ * @brief Configures the LEDC timers and both channels, once.
  * @return None.
  */
 static void ledc_start_if_needed(void)
@@ -154,107 +182,136 @@ static void ledc_start_if_needed(void)
         return;
     }
 
-    ledc_timer_config_t timer_cfg = {
-        .speed_mode = LEDC_SPEED_MODE,
-        .duty_resolution = LEDC_DUTY_RES,
-        .timer_num = LEDC_TIMER,
-        .freq_hz = s_config.pwm_freq_hz,
-        .clk_cfg = LEDC_AUTO_CLK,
-    };
-    ESP_ERROR_CHECK(ledc_timer_config(&timer_cfg));
+    reconfigure_ledc();
 
-    ledc_channel_config_t ch_cfg = {
-        .gpio_num = s_config.dimming_pin,
-        .speed_mode = LEDC_SPEED_MODE,
-        .channel = LEDC_CHANNEL,
-        .timer_sel = LEDC_TIMER,
+    ledc_channel_config_t ld_ch = {
+        .gpio_num = s_config.ld_pin,
+        .speed_mode = LEDC_MODE,
+        .channel = LD_CHANNEL,
+        .timer_sel = LD_TIMER,
         .duty = 0,
         .hpoint = 0,
-        .flags.output_invert = s_config.dim_active_high ? 1 : 0,
+        .flags.output_invert = s_config.ld_invert ? 1 : 0,
     };
-    ESP_ERROR_CHECK(ledc_channel_config(&ch_cfg));
+    ESP_ERROR_CHECK(ledc_channel_config(&ld_ch));
 
-    ESP_ERROR_CHECK(ledc_fade_func_install(0));
-
-    ledc_cbs_t callbacks = { .fade_cb = hv_fade_end_cb };
-    ESP_ERROR_CHECK(ledc_cb_register(LEDC_SPEED_MODE, LEDC_CHANNEL, &callbacks, NULL));
+    ledc_channel_config_t pwmd_ch = {
+        .gpio_num = s_config.pwmd_pin,
+        .speed_mode = LEDC_MODE,
+        .channel = PWMD_CHANNEL,
+        .timer_sel = PWMD_TIMER,
+        .duty = 0,
+        .hpoint = 0,
+        .flags.output_invert = s_config.pwmd_invert ? 1 : 0,
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&pwmd_ch));
 
     s_ledc_started = true;
 }
 
 /**
- * @brief Sets the LEDC duty cycle (with an optional fade) and drives
- * SHUTDOWN to match: >0 releases it and lights the LED, 0 asserts it
- * (immediately for a 0 ramp, on fade completion for a ramp) because PWM
- * duty 0 alone does not fully extinguish the HV9910.
- * @param percent Brightness, 0-100.
- * @param ramp_ms Ramp duration in ms; 0 for an instant change.
- * @param remember true to record a nonzero level as the volatile "last
- * level" for a later bare enable; false for cosmetic changes (identify).
+ * @brief Renders one brightness level to both channels + the lit/dark
+ * decision. Instantaneous; the single place hardware duties are written.
+ * @param level_q Commanded brightness, Q16.
  * @return None.
  */
-static void hv_do_set_dim(uint8_t percent, uint32_t ramp_ms, bool remember)
+static void apply_level(uint32_t level_q)
+{
+    ledc_start_if_needed();
+
+    hv9910_curve_out_t o = hv9910_curve_eval(s_dimming.mode, level_q, s_crossover_q, s_min_on_frac_q);
+    bool lit = o.want_lit && !s_power_cut;
+
+    uint32_t ld_duty   = lit ? scale_duty(o.ld_duty_q,   s_ld_full)   : 0;
+    uint32_t pwmd_duty = lit ? scale_duty(o.pwmd_duty_q, s_pwmd_full) : 0;
+
+    s_level_q = level_q;
+    s_dim_percent = (uint8_t)((level_q * 100u + (HV9910_Q_ONE / 2)) / HV9910_Q_ONE);
+
+    ledc_set_duty(LEDC_MODE, LD_CHANNEL, ld_duty);
+    ledc_update_duty(LEDC_MODE, LD_CHANNEL);
+    ledc_set_duty(LEDC_MODE, PWMD_CHANNEL, pwmd_duty);
+    ledc_update_duty(LEDC_MODE, PWMD_CHANNEL);
+
+    if (lit && !s_enabled) {
+        s_enabled = true;
+        ESP_LOGI(TAG, "Driver ON (%u%%, mode %u)", (unsigned)s_dim_percent, (unsigned)s_dimming.mode);
+    } else if (!lit && s_enabled) {
+        s_enabled = false;
+        ESP_LOGI(TAG, "Driver OFF (PWMD 0)");
+    }
+}
+
+/**
+ * @brief Clamps a percent and converts it to Q16.
+ * @param percent 0-100 (clamped).
+ * @return Level in Q16.
+ */
+static uint32_t pct_to_q(uint8_t percent)
 {
     if (percent > 100) {
         percent = 100;
     }
-    s_dim_percent = percent;
+    return ((uint32_t)percent * HV9910_Q_ONE) / 100u;
+}
+
+/**
+ * @brief Sets the brightness (never touches NVS).
+ * @param percent Brightness, 0-100.
+ * @param remember true to record a nonzero level as the volatile "last level".
+ * @return None.
+ */
+static void hv_do_set_dim(uint8_t percent, bool remember)
+{
+    if (percent > 100) {
+        percent = 100;
+    }
     if (remember && percent > 0) {
         s_last_nonzero_percent = percent;
     }
-
-    ledc_start_if_needed();
-
-    uint32_t duty = ((uint32_t)percent * LEDC_DUTY_MAX) / 100;
-
-    if (percent > 0 && !s_power_cut && !s_enabled) {
-        shutdown_write(shutdown_run_level());
-        s_enabled = true;
-        ESP_LOGW(TAG, "Driver ON (SHUTDOWN released)");
-    }
-
-    if (ramp_ms == 0) {
-        s_awaiting_shutdown_fade = false;
-        ledc_set_duty(LEDC_SPEED_MODE, LEDC_CHANNEL, duty);
-        ledc_update_duty(LEDC_SPEED_MODE, LEDC_CHANNEL);
-        if (percent == 0 && s_enabled) {
-            shutdown_write(shutdown_assert_level());
-            s_enabled = false;
-            ESP_LOGI(TAG, "Driver OFF (SHUTDOWN asserted -- duty 0)");
-        }
-    } else {
-        // percent==0 -> arm hv_fade_end_cb() to assert SHUTDOWN when the fade finishes.
-        s_awaiting_shutdown_fade = (percent == 0);
-        ledc_set_fade_with_time(LEDC_SPEED_MODE, LEDC_CHANNEL, duty, (int)ramp_ms);
-        ledc_fade_start(LEDC_SPEED_MODE, LEDC_CHANNEL, LEDC_FADE_NO_WAIT);
-    }
-
-    ESP_LOGI(TAG, "Dimming set to %u%% over %ums (duty=%u/%u)", percent, (unsigned)ramp_ms, (unsigned)duty, LEDC_DUTY_MAX);
+    apply_level(pct_to_q(percent));
 }
 
 /**
- * @brief Marks the driver as network-desired-on and ramps to an explicit
- * brightness. Clears the power-cut latch so a resume after a blip works.
+ * @brief Marks the driver network-desired-on, clears the power-cut latch,
+ * and applies an explicit brightness.
  * @param percent Target brightness, 0-100.
- * @param ramp_ms Ramp duration in ms.
  * @return None.
  */
-static void hv_do_enable(uint8_t percent, uint32_t ramp_ms)
+static void hv_do_enable(uint8_t percent)
 {
     s_desired_on = true;
     s_power_cut = false;
-    hv_do_set_dim(percent, ramp_ms, true);  /* releases SHUTDOWN for percent > 0 */
+    hv_do_set_dim(percent, true);
 }
 
 /**
- * @brief Ramps the brightness to 0 and turns the driver off.
- * @param ramp_ms Ramp duration in ms.
+ * @brief Turns the driver off (PWMD to 0).
  * @return None.
  */
-static void hv_do_disable(uint32_t ramp_ms)
+static void hv_do_disable(void)
 {
     s_desired_on = false;
-    hv_do_set_dim(0, ramp_ms, true);  /* asserts SHUTDOWN now (0 ramp) or on fade end */
+    apply_level(0);
+}
+
+/**
+ * @brief Adopts a new dimming configuration: reconfigures the LEDC timers
+ * and re-renders the current level under the new curve.
+ * @param p New dimming config.
+ * @return None.
+ */
+static void hv_do_apply_dimming(const hv9910_dimming_t *p)
+{
+    s_dimming = *p;
+    recompute_derived();
+    ledc_start_if_needed();
+    reconfigure_ledc();
+    apply_level(s_level_q);
+    ESP_LOGI(TAG, "Dimming: mode=%u pwm=%uHz analog=%uHz min_on=%uus xover=%u%%",
+             (unsigned)s_dimming.mode, (unsigned)s_dimming.pwm_freq_hz,
+             (unsigned)s_dimming.analog_freq_hz, (unsigned)s_dimming.min_on_time_us,
+             (unsigned)s_dimming.crossover_pct);
 }
 
 /**
@@ -265,15 +322,14 @@ static void do_identify_step(void)
 {
     if (s_identify_steps_left <= 0) {
         /* Restore exactly what we found -- identify must not disturb the
-         * on/off desire or the remembered level. hv_do_set_dim() drives
-         * SHUTDOWN both ways. */
-        hv_do_set_dim(s_identify_saved_enabled ? s_identify_saved_dim : 0, 0, false);
+         * on/off desire or the level. */
+        apply_level(s_identify_saved_enabled ? s_identify_saved_level_q : 0);
         s_desired_on = s_identify_saved_desired;
         s_pending = PENDING_NONE;
         return;
     }
 
-    hv_do_set_dim(s_identify_next_is_on ? 100 : 0, 0, false);
+    apply_level(s_identify_next_is_on ? HV9910_Q_ONE : 0);
     s_identify_next_is_on = !s_identify_next_is_on;
     s_identify_steps_left--;
 
@@ -288,7 +344,7 @@ static void do_identify_step(void)
 static void hv_do_identify(void)
 {
     s_identify_saved_enabled = s_enabled;
-    s_identify_saved_dim = s_dim_percent;
+    s_identify_saved_level_q = s_level_q;
     s_identify_saved_desired = s_desired_on;
     s_power_cut = false;   /* IDENTIFY only runs once power is confirmed */
 
@@ -306,13 +362,13 @@ static void dispatch_cmd(const hv9910_cmd_t *cmd)
 {
     switch (cmd->type) {
     case HV_CMD_ENABLE:
-        hv_do_enable(cmd->percent, cmd->ramp_ms);
+        hv_do_enable(cmd->percent);
         break;
     case HV_CMD_DISABLE:
-        hv_do_disable(cmd->ramp_ms);
+        hv_do_disable();
         break;
     case HV_CMD_SET_DIM:
-        hv_do_set_dim(cmd->percent, cmd->ramp_ms, true);
+        hv_do_set_dim(cmd->percent, true);
         break;
     case HV_CMD_IDENTIFY:
         hv_do_identify();
@@ -324,28 +380,23 @@ static void dispatch_cmd(const hv9910_cmd_t *cmd)
         }
         break;
     case HV_CMD_EMERGENCY_OFF:
-        // SHUTDOWN is the real cut; duty is irrelevant while it's asserted.
-        // s_power_cut latches so a SET_DIM already queued behind this can't
-        // re-release SHUTDOWN before an explicit ENABLE (or the power-ready
-        // path) says it's safe.
-        s_awaiting_shutdown_fade = false;
+        /* PWMD low is the real cut; latch it so a SET_DIM already queued
+         * behind this can't re-light before an explicit ENABLE. */
         s_power_cut = true;
-        shutdown_write(shutdown_assert_level());
+        s_pending = PENDING_NONE;
+        if (s_ledc_started) {
+            ledc_set_duty(LEDC_MODE, PWMD_CHANNEL, 0);
+            ledc_update_duty(LEDC_MODE, PWMD_CHANNEL);
+            ledc_set_duty(LEDC_MODE, LD_CHANNEL, 0);
+            ledc_update_duty(LEDC_MODE, LD_CHANNEL);
+        }
         s_enabled = false;
         s_dim_percent = 0;
-        if (s_ledc_started) {
-            ledc_set_duty(LEDC_SPEED_MODE, LEDC_CHANNEL, 0);
-            ledc_update_duty(LEDC_SPEED_MODE, LEDC_CHANNEL);
-        }
-        ESP_LOGW(TAG, "Driver EMERGENCY OFF (SHUTDOWN asserted; resumes on power if it was on)");
+        s_level_q = 0;
+        ESP_LOGW(TAG, "Driver EMERGENCY OFF (PWMD forced low; resumes on power if it was on)");
         break;
-    case HV_CMD_FADE_TO_ZERO_DONE:
-        // From hv_fade_end_cb(); s_enabled check is just idempotency.
-        if (s_enabled) {
-            shutdown_write(shutdown_assert_level());
-            s_enabled = false;
-            ESP_LOGI(TAG, "Driver DISABLED (SHUTDOWN asserted, after ramp)");
-        }
+    case HV_CMD_APPLY_DIMMING:
+        hv_do_apply_dimming(&cmd->dim);
         break;
     }
 }
@@ -427,34 +478,38 @@ void hv9910_init(const hv9910_config_t *config)
 {
     s_config = *config;
 
-    gpio_config_t shutdown_cfg = {
-        .pin_bit_mask = 1ULL << s_config.shutdown_pin,
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    ESP_ERROR_CHECK(gpio_config(&shutdown_cfg));
-    shutdown_write(shutdown_assert_level());
-
-    gpio_config_t dim_cfg = {
-        .pin_bit_mask = 1ULL << s_config.dimming_pin,
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    ESP_ERROR_CHECK(gpio_config(&dim_cfg));
-    gpio_set_level(s_config.dimming_pin, s_config.dim_active_high ? 1 : 0);
+    /* Safe default until driver_config pushes the persisted config. */
+    s_dimming.mode = HV9910_DIM_HYBRID;
+    s_dimming.pwm_freq_hz = 2000;
+    s_dimming.analog_freq_hz = 60000;
+    s_dimming.min_on_time_us = 20;
+    s_dimming.crossover_pct = 20;
+    recompute_derived();
 
     s_enabled = false;
     s_dim_percent = 0;
+    s_level_q = 0;
     s_last_nonzero_percent = 0;
     s_desired_on = false;
+    s_power_cut = false;
     s_ledc_started = false;
 
-    ESP_LOGI(TAG, "HV9910 initialized in safe mode: SHUTDOWN asserted (%d), DIM=0%%, LED off",
-             shutdown_assert_level());
+    /* Both pins driven low before the LEDC takes them over: PWMD low =
+     * driver disabled, so the LED is unambiguously off at boot. */
+    gpio_config_t io = {
+        .pin_bit_mask = (1ULL << s_config.pwmd_pin) | (1ULL << s_config.ld_pin),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&io));
+    /* Drive each pin to the level that a duty of 0 produces once the LEDC
+     * takes over (i.e. the "off" state), accounting for output_invert. */
+    gpio_set_level(s_config.pwmd_pin, s_config.pwmd_invert ? 1 : 0);
+    gpio_set_level(s_config.ld_pin, s_config.ld_invert ? 1 : 0);
+
+    ESP_LOGI(TAG, "HV9910 initialized: PWMD off (LED off), default mode HYBRID");
 
     s_cmd_queue = xQueueCreate(CMD_QUEUE_LEN, sizeof(hv9910_cmd_t));
     if (s_cmd_queue == NULL) {
@@ -473,24 +528,33 @@ void hv9910_init(const hv9910_config_t *config)
     s_task_ready = true;
 }
 
-void hv9910_enable_at(uint8_t percent, uint32_t ramp_ms)
+void hv9910_set_dimming(const hv9910_dimming_t *p)
+{
+    if (p == NULL) {
+        return;
+    }
+    hv9910_cmd_t cmd = { .type = HV_CMD_APPLY_DIMMING, .dim = *p };
+    post_cmd(&cmd, false);
+}
+
+void hv9910_enable_at(uint8_t percent)
 {
     if (percent > 100) {
         percent = 100;
     }
-    hv9910_cmd_t cmd = { .type = HV_CMD_ENABLE, .ramp_ms = clamp_ramp_ms(ramp_ms), .percent = percent };
+    hv9910_cmd_t cmd = { .type = HV_CMD_ENABLE, .percent = percent };
     post_cmd(&cmd, false);
 }
 
-void hv9910_enable(uint32_t ramp_ms)
+void hv9910_enable(void)
 {
     uint8_t target = (s_last_nonzero_percent > 0) ? s_last_nonzero_percent : DEFAULT_ON_PERCENT;
-    hv9910_enable_at(target, ramp_ms);
+    hv9910_enable_at(target);
 }
 
-void hv9910_disable(uint32_t ramp_ms)
+void hv9910_disable(void)
 {
-    hv9910_cmd_t cmd = { .type = HV_CMD_DISABLE, .ramp_ms = clamp_ramp_ms(ramp_ms) };
+    hv9910_cmd_t cmd = { .type = HV_CMD_DISABLE };
     post_cmd(&cmd, false);
 }
 
@@ -500,9 +564,9 @@ void hv9910_emergency_disable(void)
     post_cmd(&cmd, true);
 }
 
-void hv9910_set_dim(uint8_t percent, uint32_t ramp_ms)
+void hv9910_set_dim(uint8_t percent)
 {
-    hv9910_cmd_t cmd = { .type = HV_CMD_SET_DIM, .ramp_ms = clamp_ramp_ms(ramp_ms), .percent = percent };
+    hv9910_cmd_t cmd = { .type = HV_CMD_SET_DIM, .percent = percent };
     post_cmd(&cmd, false);
 }
 
@@ -520,7 +584,7 @@ void hv9910_set_pending(bool on, uint8_t remember_pct)
 
 bool hv9910_is_ramp_pending(void)
 {
-    return s_pending != PENDING_NONE || s_awaiting_shutdown_fade;
+    return s_pending != PENDING_NONE;
 }
 
 uint8_t hv9910_get_dim_percent(void)

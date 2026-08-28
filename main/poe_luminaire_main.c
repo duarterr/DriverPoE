@@ -10,6 +10,7 @@
 
 #include "poe_luminaire_main.h"
 #include "hv9910.h"
+#include "driver_config.h"
 #include "tps2378.h"
 #include "voltage_sense.h"
 #include "eth_init.h"
@@ -37,7 +38,7 @@ static void poweron_settle_cb(void *arg)
     }
 
     ESP_LOGI(TAG, "Power-on settle complete: %s", tps2378_source_name(source));
-    hv9910_enable(HV9910_DEFAULT_RAMP_MS);
+    hv9910_enable();
 }
 
 /**
@@ -75,7 +76,7 @@ static void on_poe_power_ready(tps2378_source_t source, void *ctx)
         ESP_LOGW(TAG, "Power-on timer failed (%s)", esp_err_to_name(err));
     }
 
-    hv9910_enable(HV9910_DEFAULT_RAMP_MS);
+    hv9910_enable();
 }
 
 /**
@@ -142,14 +143,13 @@ void app_main(void)
     confirm_app_if_pending_verify();
 
     hv9910_config_t hv9910_cfg = {
-        .shutdown_pin = PIN_HV9910_SHUTDOWN,
-        .dimming_pin = PIN_HV9910_DIMMING,
-        .shutdown_active_high = HV9910_SHUTDOWN_ACTIVE_HIGH,
-        .dim_active_high = HV9910_DIM_ACTIVE_HIGH,
-        .pwm_freq_hz = HV9910_PWM_FREQ_HZ,
-        .max_ramp_ms = HV9910_MAX_RAMP_MS,
+        .pwmd_pin = PIN_HV9910_PWMD,
+        .ld_pin = PIN_HV9910_LD,
+        .pwmd_invert = HV9910_PWMD_INVERT,
+        .ld_invert = HV9910_LD_INVERT,
     };
     hv9910_init(&hv9910_cfg);
+    driver_config_start();   /* loads the dimming mode from NVS and pushes it to hv9910 */
 
     static const uint8_t admin_default_secret[DEVID_SECRET_LEN] = ADMIN_DEFAULT_SECRET;
     devid_config_t devid_cfg = {

@@ -9,13 +9,10 @@
 #define ADC_CH_VLED_P                  ADC_CHANNEL_6  /**< LED+ ADC channel. */
 #define ADC_CH_VLED_N                  ADC_CHANNEL_7  /**< LED- ADC channel. */
 
-#define PIN_HV9910_SHUTDOWN            GPIO_NUM_32    /**< HV9910 SHUTDOWN GPIO. */
-#define PIN_HV9910_DIMMING             GPIO_NUM_33    /**< HV9910 DIM PWM GPIO. */
-#define HV9910_SHUTDOWN_ACTIVE_HIGH    0               /**< SHUTDOWN polarity. */
-#define HV9910_DIM_ACTIVE_HIGH         1               /**< DIM polarity. */
-#define HV9910_PWM_FREQ_HZ             10000           /**< Dimming PWM frequency. */
-#define HV9910_DEFAULT_RAMP_MS         250             /**< Default ramp duration. */
-#define HV9910_MAX_RAMP_MS             10000           /**< Ramp duration ceiling. */
+#define PIN_HV9910_PWMD               GPIO_NUM_32    /**< HV9910 PWMD (digital dimming) GPIO. Low = driver off. */
+#define PIN_HV9910_LD                 GPIO_NUM_33    /**< HV9910 LD (linear dimming) GPIO, via the PCB RC/DAC. */
+#define HV9910_PWMD_INVERT            0              /**< LEDC output_invert for PWMD: 0 -> duty maps to brightness, duty 0 = off. */
+#define HV9910_LD_INVERT             1              /**< LEDC output_invert for LD: keeps the working sense of the GPIO33 -> RC -> LD path. */
 
 #define PIN_ETH_RXD0                   GPIO_NUM_25    /**< EMAC RXD0 (fixed in hardware). */
 #define PIN_ETH_RXD1                   GPIO_NUM_26    /**< EMAC RXD1 (fixed in hardware). */
