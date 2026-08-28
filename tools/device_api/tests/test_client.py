@@ -50,6 +50,8 @@ def _info_payload() -> bytes:
     # universe 0 / sACN 1, no ip, address 1, personality 0, protos 3
     buf += bytes([0, 0, 0, 0]) + struct.pack(">H", 0) + struct.pack(">H", 1) + bytes(4)
     buf += struct.pack(">H", 1) + bytes([0, 3])
+    # dimming-mode block (8 B): hybrid, 2000 Hz, 6000 (=60 kHz /10), 20 us, 20%
+    buf += bytes([2]) + struct.pack(">H", 2000) + struct.pack(">H", 6000) + struct.pack(">H", 20) + bytes([20])
     return bytes(buf)
 
 

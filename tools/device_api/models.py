@@ -42,6 +42,12 @@ class DeviceInfo:
     dmx_address: int                 # DMX start channel, 1..512
     dmx_personality: int             # 0 = 1ch 8-bit, 1 = 2ch 16-bit
     dmx_proto_mask: int              # DMX_PROTO_ARTNET | DMX_PROTO_SACN
+    # HV9910 dimming mode (from the INFO response's trailing block).
+    dimming_mode: int                # 0 = pwm, 1 = analog, 2 = hybrid
+    dimming_pwm_freq_hz: int
+    dimming_analog_freq_hz: int
+    dimming_min_on_time_us: int
+    dimming_crossover_pct: int
 
     @property
     def mac_str(self) -> str:

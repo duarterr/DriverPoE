@@ -38,6 +38,11 @@ def _info(**overrides) -> DeviceInfo:
         dmx_address=1,
         dmx_personality=0,
         dmx_proto_mask=3,
+        dimming_mode=2,
+        dimming_pwm_freq_hz=2000,
+        dimming_analog_freq_hz=60000,
+        dimming_min_on_time_us=20,
+        dimming_crossover_pct=20,
     )
     fields.update(overrides)
     return DeviceInfo(**fields)

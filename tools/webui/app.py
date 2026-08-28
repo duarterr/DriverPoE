@@ -124,6 +124,12 @@ def _device_to_dict(info: DeviceInfo) -> dict[str, Any]:
         "dmx_address": info.dmx_address,
         "dmx_personality": info.dmx_personality,
         "dmx_proto_mask": info.dmx_proto_mask,
+        "dimming_mode": info.dimming_mode,
+        "dimming_mode_name": DRIVER_MODE_NAMES.get(info.dimming_mode, str(info.dimming_mode)),
+        "dimming_pwm_freq_hz": info.dimming_pwm_freq_hz,
+        "dimming_analog_freq_hz": info.dimming_analog_freq_hz,
+        "dimming_min_on_time_us": info.dimming_min_on_time_us,
+        "dimming_crossover_pct": info.dimming_crossover_pct,
     }
 
 

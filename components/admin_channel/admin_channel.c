@@ -453,6 +453,18 @@ static void handle_info(int sock, const parsed_header_t *hdr, const struct socka
     payload[off++] = dmx.personality;
     payload[off++] = dmx.proto_mask;
 
+    /* --- Dimming-mode block: 8 bytes appended after the DMX block
+     * (payload = 72). Lets tools/webui show the current mode/params without
+     * an authenticated DRIVER_GET_CONFIG. analog_freq_hz is sent in units
+     * of 10 Hz so it fits a u16. --- */
+    driver_config_t drv = {0};
+    driver_config_get(&drv);
+    payload[off++] = drv.mode;
+    put_u16_be(payload + off, drv.pwm_freq_hz); off += 2;
+    put_u16_be(payload + off, (uint16_t)(drv.analog_freq_hz / 10)); off += 2;
+    put_u16_be(payload + off, drv.min_on_time_us); off += 2;
+    payload[off++] = drv.crossover_pct;
+
     send_packet(sock, src, ADMIN_TYPE_INFO_RESP, NULL, payload, (uint16_t)off, NULL);
 }
 

@@ -43,9 +43,12 @@
  * that lives near level 0 (level < crossover * min_on_frac), not at the knee.
  *
  * --- Min-on-time / bottom-of-scale resolution (PWM + HYBRID) ---
- * Each PWMD conduction burst must contain enough HV9910 switching cycles
- * for the inductor current to reach regime, so a requested PWMD duty is
- * either >= min_on_frac_q or exactly 0 -- never a truncated burst.
+ * The HV9910 runs its own buck switching loop at ~120-170 kHz (period
+ * ~6-8 us) -- far faster than our 1-5 kHz PWMD chop. Each PWMD conduction
+ * burst must last a few of those internal cycles for the inductor current
+ * to reach regime (~20 us default), or the LED gets a stunted, nonlinear
+ * flash. So a requested PWMD duty is either >= min_on_frac_q or exactly 0
+ * -- never a truncated burst.
  * min_on_frac_q = min_on_time_us * pwm_freq_hz / 1e6. Smallest non-zero
  * PWM step (and the width of the forced-dark zone just above 0):
  *
