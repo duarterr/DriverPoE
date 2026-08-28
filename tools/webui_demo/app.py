@@ -57,6 +57,7 @@ _readback_misses = 0                      # consecutive readback cycles with no 
 _effect_stop = threading.Event()
 _effect_lock = threading.Lock()
 _effect_name: str | None = None
+_strobe = {"hz": 8.0, "duty": 50.0, "picks": []}   # updated by /api/effects/start; pushed to the sender live
 
 
 # ======================================================================= #
@@ -76,7 +77,10 @@ class IdentifyRequest(BaseModel):
 
 
 class EffectRequest(BaseModel):
-    name: str                         # wave | pulse | identify
+    name: str                         # wave | pulse | identify | strobe
+    hz: float = Field(default=8.0, ge=1.0, le=20.0)    # strobe rate
+    duty: float = Field(default=50.0, ge=5.0, le=95.0) # strobe on-fraction, percent
+    fixtures: list[str] | None = None                  # strobe: which IPs (default: all controllable)
 
 
 class SpectrumItem(BaseModel):
@@ -297,13 +301,24 @@ def _ping_pong_indices(n: int) -> list[int]:
     return list(range(n)) + list(range(n - 2, 0, -1))
 
 
-def _run_effect(name: str) -> None:
+def _run_effect(name: str, fixtures: list[str] | None = None) -> None:
     global _effect_name
     try:
         ips = _controllable_ips()
         if not ips:
             return
-        if name == "identify":
+        if name == "strobe":
+            # The actual pulsing runs inside the sender's 40 Hz TX loop
+            # (artnet.py:set_strobe) so it's locked to the frame clock; this
+            # thread just re-pushes the live params (rate/duty/fixtures).
+            # set_strobe / clear_strobe restore dropped fixtures themselves.
+            while not _effect_stop.is_set():
+                picks = [ip for ip in ips if not _strobe["picks"] or ip in _strobe["picks"]] or ips
+                _sender.set_strobe(picks, _strobe["hz"], _strobe["duty"])
+                if _effect_stop.wait(0.1):
+                    break
+            _sender.clear_strobe()
+        elif name == "identify":
             order = _ping_pong_indices(len(ips))
             while not _effect_stop.is_set():
                 for idx in order:
@@ -351,17 +366,23 @@ def _run_effect(name: str) -> None:
 @app.post("/api/effects/start")
 def start_effect(body: EffectRequest):
     global _effect_name
-    if body.name not in {"identify", "pulse", "wave"}:
+    if body.name not in {"identify", "pulse", "wave", "strobe"}:
         raise HTTPException(400, "unknown effect")
     if not _controllable_ips():
         raise HTTPException(400, "No commissioned fixtures.")
     _resume_stream()
     with _effect_lock:
+        if body.name == "strobe":
+            _strobe["hz"], _strobe["duty"] = body.hz, body.duty
+            _strobe["picks"] = list(body.fixtures or [])
+            if _effect_name == "strobe":
+                return {"running": "strobe"}   # already running -- rate/duty/fixtures updated live
         if _effect_name:
             raise HTTPException(409, "An effect is already running. Stop it first.")
         _effect_stop.clear()
         _effect_name = body.name
-        threading.Thread(target=_run_effect, args=(body.name,), daemon=True).start()
+        threading.Thread(target=_run_effect, args=(body.name, body.fixtures),
+                         daemon=True).start()
     return {"running": body.name}
 
 
@@ -408,12 +429,20 @@ async def analyze_music(request: Request, sr: int, n_bands: int):
     }
 
 
+@app.post("/api/release")
+def release():
+    """Stop the Art-Net stream, leaving fixtures at their last level. Each
+    one then hits its signal-loss timeout and the admin channel takes
+    control back. Any control action resumes the stream."""
+    _effect_stop.set()
+    _sender.stop()
+    return {"ok": True, "sender_running": _sender.running}
+
+
 @app.post("/api/blackout")
 def blackout():
-    """Stop driving entirely: kill any effect, zero the buffers, then stop
-    the Art-Net stream. With no source on the wire each fixture hits its
-    signal-loss timeout and the admin channel takes control back. Any
-    control action (group/effect/spectrum/identify) resumes the stream."""
+    """Like /api/release, but zero every fixture first so the stage goes
+    dark immediately instead of holding until the loss timeout."""
     _effect_stop.set()
     _sender.set_many([(ip, 0) for ip in _controllable_ips()])
     time.sleep(0.15)   # let a few explicit "0" frames go out before the stream dies

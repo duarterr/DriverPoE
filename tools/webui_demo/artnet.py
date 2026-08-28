@@ -55,6 +55,7 @@ class ArtNetSender:
         self._seq: dict[int, int] = {}
         self._patch: dict[str, tuple[int, int, int]] = {}  # ip -> (port_address, addr_1based, channels)
         self._levels: dict[str, int] = {}              # ip -> last percent we set
+        self._strobe: dict | None = None               # {picks, period, on, frame} -- driven by the TX loop
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         self._thread: threading.Thread | None = None
@@ -98,6 +99,36 @@ class ArtNetSender:
         with self._lock:
             return dict(self._levels)
 
+    # -- strobe --------------------------------------------------------------
+    def set_strobe(self, ips, hz: float, duty: float) -> None:
+        """Blink `ips` on/off from inside the TX loop, so the pulses are
+        locked to the 40 Hz frame clock instead of a separate sleep loop
+        that beats against it. The rate is quantised to whole frames:
+        period = round(fps / hz) frames, on = round(period * duty%)."""
+        period = max(2, round(self._fps / max(0.1, hz)))
+        on = min(period - 1, max(1, round(period * duty / 100.0)))
+        picks = {ip for ip in ips if ip in self._patch}
+        with self._lock:
+            st = self._strobe
+            if st and st["picks"] == picks and st["period"] == period and st["on"] == on:
+                return
+            if st:                                  # fixtures dropped from the strobe
+                for ip in st["picks"] - picks:      # go straight back to their steady level
+                    self._apply_one_locked(ip, self._levels.get(ip, 0))
+            self._strobe = {"picks": picks, "period": period, "on": on,
+                            "frame": (st["frame"] % period) if st else 0}
+
+    def clear_strobe(self) -> None:
+        with self._lock:
+            st = self._strobe
+            self._strobe = None
+            if st:
+                for ip in st["picks"]:
+                    self._apply_one_locked(ip, self._levels.get(ip, 0))
+
+    def strobe_actual_hz(self, hz: float) -> float:
+        return self._fps / max(2, round(self._fps / max(0.1, hz)))
+
     def _apply_one_locked(self, ip: str, percent: int) -> None:
         pa, addr, channels = self._patch[ip]
         buf = self._buffers.get(pa)
@@ -136,9 +167,15 @@ class ArtNetSender:
 
     def _run(self) -> None:
         interval = 1.0 / self._fps
+        next_tick = time.monotonic()
         while not self._stop.is_set():
-            start = time.monotonic()
             with self._lock:
+                st = self._strobe
+                if st and st["picks"]:
+                    st["frame"] = (st["frame"] + 1) % st["period"]
+                    lit = 100 if st["frame"] < st["on"] else 0
+                    for ip in st["picks"]:
+                        self._apply_one_locked(ip, lit)
                 frames = []
                 for pa, buf in self._buffers.items():
                     self._seq[pa] = (self._seq.get(pa, 0) % 255) + 1
@@ -150,4 +187,12 @@ class ArtNetSender:
                     self._sock.sendto(pkt, (ip, ARTNET_PORT))
                 except OSError:
                     pass
-            time.sleep(max(0.0, interval - (time.monotonic() - start)))
+            # absolute schedule: frame N leaves at t0 + N*interval, so the
+            # strobe (counted in frames) stays locked to the wall clock and
+            # a slow send() doesn't push the next frame late.
+            next_tick += interval
+            slack = next_tick - time.monotonic()
+            if slack < -interval:            # fell way behind -- resync
+                next_tick = time.monotonic()
+            elif slack > 0:
+                time.sleep(slack)
