@@ -206,6 +206,12 @@ class TestInfoPayload(unittest.TestCase):
             dmx_address=17,
             dmx_personality=1,
             dmx_proto_mask=3,
+            # dimming-mode block
+            dimming_mode=2,
+            dimming_pwm_freq_hz=2000,
+            dimming_analog_freq_hz=60000,   # sent /10 on the wire
+            dimming_min_on_time_us=20,
+            dimming_crossover_pct=20,
         )
         fields.update(overrides)
         buf = bytearray()
@@ -235,11 +241,16 @@ class TestInfoPayload(unittest.TestCase):
         buf += struct.pack(">H", fields["dmx_address"])
         buf.append(fields["dmx_personality"])
         buf.append(fields["dmx_proto_mask"])
+        buf.append(fields["dimming_mode"])
+        buf += struct.pack(">H", fields["dimming_pwm_freq_hz"])
+        buf += struct.pack(">H", fields["dimming_analog_freq_hz"] // 10)
+        buf += struct.pack(">H", fields["dimming_min_on_time_us"])
+        buf.append(fields["dimming_crossover_pct"])
         return bytes(buf)
 
     def test_parses_all_fields(self):
         payload = self._build_payload()
-        self.assertEqual(len(payload), 64)
+        self.assertEqual(len(payload), 72)
         parsed = parse_info_payload(payload)
         self.assertEqual(parsed["mac"], bytes.fromhex("A4CF12B93D08"))
         self.assertEqual(parsed["fw_version"], "1.2.3")
@@ -263,12 +274,17 @@ class TestInfoPayload(unittest.TestCase):
         self.assertEqual(parsed["dmx_address"], 17)
         self.assertEqual(parsed["dmx_personality"], 1)
         self.assertEqual(parsed["dmx_proto_mask"], 3)
+        self.assertEqual(parsed["dimming_mode"], 2)
+        self.assertEqual(parsed["dimming_pwm_freq_hz"], 2000)
+        self.assertEqual(parsed["dimming_analog_freq_hz"], 60000)
+        self.assertEqual(parsed["dimming_min_on_time_us"], 20)
+        self.assertEqual(parsed["dimming_crossover_pct"], 20)
 
     def test_wrong_size_rejected(self):
         with self.assertRaises(ProtocolError):
             parse_info_payload(b"\x00" * 10)
         with self.assertRaises(ProtocolError):
-            parse_info_payload(b"\x00" * 48)   # the pre-DMX layout is no longer accepted
+            parse_info_payload(b"\x00" * 64)   # the pre-dimming-block layout is no longer accepted
 
     def test_unknown_enums_fall_back_to_numeric_string(self):
         payload = self._build_payload(reset_reason=250, poe_source=99)

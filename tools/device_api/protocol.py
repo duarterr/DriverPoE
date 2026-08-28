@@ -51,7 +51,7 @@ OTA_SHA256_LEN = 32
 
 ZERO_NONCE = b"\x00" * NONCE_LEN
 
-INFO_RESP_PAYLOAD_SIZE = 64       # 48-byte core block + 16-byte DMX status block
+INFO_RESP_PAYLOAD_SIZE = 72       # 48 core + 16 DMX status + 8 dimming-mode
 
 # DMX layer config wire format -- must match DMX_CFG_WIRE_SIZE /
 # dmx_config_pack() in components/dmx_input/include/dmx_input.h. 18 bytes:
@@ -313,6 +313,16 @@ def parse_info_payload(payload: bytes) -> dict:
         "dmx_address": struct.unpack(">H", b[12:14])[0],
         "dmx_personality": b[14],
         "dmx_proto_mask": b[15],
+    })
+
+    # Dimming-mode block (payload[64:72]); analog_freq_hz is in units of 10 Hz.
+    d = payload[64:72]
+    out.update({
+        "dimming_mode": d[0],
+        "dimming_pwm_freq_hz": struct.unpack(">H", d[1:3])[0],
+        "dimming_analog_freq_hz": struct.unpack(">H", d[3:5])[0] * 10,
+        "dimming_min_on_time_us": struct.unpack(">H", d[5:7])[0],
+        "dimming_crossover_pct": d[7],
     })
     return out
 
