@@ -52,7 +52,6 @@ OTA_SHA256_LEN = 32
 ZERO_NONCE = b"\x00" * NONCE_LEN
 
 INFO_RESP_PAYLOAD_SIZE = 72       # 48 core + 16 DMX status + 8 dimming-mode
-INFO_RESP_MIN_PAYLOAD_SIZE = 64   # firmware without the dimming block (pre-1.3.0); still discoverable so it can be OTA'd
 
 # DMX layer config wire format -- must match DMX_CFG_WIRE_SIZE /
 # dmx_config_pack() in components/dmx_input/include/dmx_input.h. 18 bytes:
@@ -263,10 +262,9 @@ def parse_info_payload(payload: bytes) -> dict:
     """Returns a plain dict of the fields, in wire order -- models.py's
     DeviceInfo adds the serial (from the packet header) and source_ip
     (from the socket) that aren't part of this payload itself."""
-    if len(payload) not in (INFO_RESP_MIN_PAYLOAD_SIZE, INFO_RESP_PAYLOAD_SIZE):
+    if len(payload) != INFO_RESP_PAYLOAD_SIZE:
         raise ProtocolError(
-            f"unexpected INFO_RESP payload size: {len(payload)} "
-            f"(expected {INFO_RESP_MIN_PAYLOAD_SIZE} or {INFO_RESP_PAYLOAD_SIZE})")
+            f"unexpected INFO_RESP payload size: {len(payload)} (expected {INFO_RESP_PAYLOAD_SIZE})")
     mac = payload[0:6]
     fw_version = payload[6:22].split(b"\x00", 1)[0].decode("ascii", errors="replace")
     ip = ".".join(str(b) for b in payload[22:26])
@@ -318,22 +316,14 @@ def parse_info_payload(payload: bytes) -> dict:
     })
 
     # Dimming-mode block (payload[64:72]); analog_freq_hz is in units of 10 Hz.
-    # Absent on pre-1.3.0 firmware -- report zeros so DeviceInfo still builds
-    # (the unit is still discoverable and can be OTA'd to a build that has it).
-    if len(payload) >= INFO_RESP_PAYLOAD_SIZE:
-        d = payload[64:72]
-        out.update({
-            "dimming_mode": d[0],
-            "dimming_pwm_freq_hz": struct.unpack(">H", d[1:3])[0],
-            "dimming_analog_freq_hz": struct.unpack(">H", d[3:5])[0] * 10,
-            "dimming_min_on_time_us": struct.unpack(">H", d[5:7])[0],
-            "dimming_crossover_pct": d[7],
-        })
-    else:
-        out.update({
-            "dimming_mode": 0, "dimming_pwm_freq_hz": 0, "dimming_analog_freq_hz": 0,
-            "dimming_min_on_time_us": 0, "dimming_crossover_pct": 0,
-        })
+    d = payload[64:72]
+    out.update({
+        "dimming_mode": d[0],
+        "dimming_pwm_freq_hz": struct.unpack(">H", d[1:3])[0],
+        "dimming_analog_freq_hz": struct.unpack(">H", d[3:5])[0] * 10,
+        "dimming_min_on_time_us": struct.unpack(">H", d[5:7])[0],
+        "dimming_crossover_pct": d[7],
+    })
     return out
 
 
