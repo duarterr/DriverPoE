@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DriverPoE — Light Demo</title>
 <style>
-:root{--ink:#f6f7ff;--muted:#a9afc7;--line:#ffffff1c;--hot:#d6ff43;--violet:#8c63ff;--panel:#111526d9}*{box-sizing:border-box}body{margin:0;min-height:100vh;color:var(--ink);font:15px/1.4 Inter,ui-sans-serif,system-ui,sans-serif;background:#060814;overflow-x:hidden}body:before{content:"";position:fixed;inset:-30%;z-index:-2;background:radial-gradient(circle at 22% 20%,#6c3eda99,transparent 25%),radial-gradient(circle at 78% 30%,#1e7ce58c,transparent 25%),radial-gradient(circle at 50% 95%,#b6dd2560,transparent 30%);filter:blur(30px);animation:drift 12s ease-in-out infinite alternate}@keyframes drift{to{transform:scale(1.13) rotate(6deg)}}.shell{max-width:1180px;margin:auto;padding:28px 22px 48px}.status{padding:9px 13px;border:1px solid var(--line);border-radius:999px;color:var(--muted);background:#0d1021a8;white-space:nowrap}.stage{position:relative;min-height:240px;overflow:hidden;border:1px solid var(--line);border-radius:25px;background:linear-gradient(135deg,#171841e6,#0d193be6);box-shadow:0 24px 70px #0005;padding:25px;display:flex;align-items:end}.stage:after{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(105deg,transparent 0 11%,#fff1 11.3% 11.7%,transparent 12% 22%);opacity:.35}#rays{position:absolute;inset:0;width:100%;height:100%;opacity:.9}.stage-copy{position:relative;z-index:1;max-width:520px}.stage h2{font-size:clamp(24px,3.6vw,36px);line-height:1.04;letter-spacing:-.05em;margin:0 0 9px}.stage p{color:#d5d8e9;margin:0}.stage code{background:#ffffff14;padding:1px 6px;border-radius:5px;font-size:.85em}.grid{display:grid;grid-template-columns:1.08fr .92fr;gap:16px;margin-top:16px}.card{border:1px solid var(--line);background:var(--panel);backdrop-filter:blur(18px);border-radius:18px;padding:20px}.card h3{margin:0 0 5px;font-size:17px}.card-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:5px}.card-head h3{margin:0}.hint{margin:0 0 15px;color:var(--muted);font-size:13px}.controls{display:flex;gap:9px;flex-wrap:wrap}.btn{appearance:none;border:1px solid #ffffff28;border-radius:10px;color:var(--ink);background:#ffffff0c;padding:10px 14px;font:inherit;font-weight:650;cursor:pointer;transition:.18s}.btn:hover:not(:disabled){transform:translateY(-2px);border-color:#fff7;background:#ffffff1d}.btn.primary{color:#182000;background:var(--hot);border-color:var(--hot)}.btn.violet{background:var(--violet);border-color:var(--violet)}.btn.danger{color:#ffb6bd}.btn:disabled{opacity:.48;cursor:not-allowed}.range-row{display:flex;align-items:center;gap:15px;margin-top:17px}.range-row output{font-weight:750;min-width:36px;color:var(--hot)}input[type=range]{accent-color:var(--hot);width:100%}.network{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:13px}input[type=text]{flex:1;min-width:150px;background:#070a18;border:1px solid var(--line);border-radius:10px;padding:10px;color:var(--ink);font:inherit}.fixtures{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;max-height:320px;overflow:auto}.fixture{padding:11px;border:1px solid var(--line);border-radius:12px;background:#060916a1}.fixture.off{opacity:.5}.fixture-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}.fixture-index{font-size:11px;font-weight:750;color:var(--hot)}.fixture-addr{font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums}.mini-btn{appearance:none;border:1px solid #ffffff28;border-radius:6px;background:#ffffff0c;color:var(--ink);font:inherit;font-size:11px;padding:3px 7px;cursor:pointer;line-height:1.3}.mini-btn:hover:not(:disabled){background:#ffffff1d}.mini-btn:disabled{opacity:.3;cursor:not-allowed}.identify-btn{display:block;width:100%;margin-top:8px;text-align:center}.fixture strong{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fixture small{color:var(--muted);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fixture .note{color:var(--warn,#ffbd5c);font-size:11px;margin-top:3px}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#ff6172;margin-right:5px}.dot.ok{background:var(--hot);box-shadow:0 0 7px var(--hot)}.level-bar{height:4px;border-radius:99px;background:#ffffff13;margin-top:6px;overflow:hidden}.level-bar i{display:block;height:100%;background:var(--hot);transition:width .1s}.effects{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}.effects .btn{text-align:left;padding:13px}.effects small{display:block;color:var(--muted);font-weight:400;margin-top:2px}.music{margin-top:16px}.music-top{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.meter{height:8px;background:#ffffff13;border-radius:99px;overflow:hidden;margin-top:13px}.meter i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--hot),#50cdff,#c971ff);box-shadow:0 0 16px #8c63ff;transition:width .05s linear}.bands{display:flex;align-items:flex-end;gap:6px;height:64px;margin-top:13px}.band-col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}.band{width:100%;min-height:3px;border-radius:5px 5px 2px 2px;transition:height .05s linear}.band-col b{margin-top:5px;font-size:12px;color:var(--ink)}.band-label{display:flex;gap:6px;margin-top:3px}.band-label span{flex:1;text-align:center;color:var(--muted);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.toast{position:fixed;right:20px;bottom:20px;max-width:380px;padding:12px 15px;border-radius:12px;background:#171b2f;box-shadow:0 12px 35px #0008;border:1px solid var(--line);opacity:0;transform:translateY(10px);pointer-events:none;transition:.2s}.toast.show{opacity:1;transform:none}.toast.error{border-color:#f36b76}.card.span2{grid-column:1/-1}@media(max-width:760px){.grid{grid-template-columns:1fr}.stage{min-height:200px}.shell{padding:18px 14px}.effects{grid-template-columns:1fr}}
+:root{--ink:#f6f7ff;--muted:#a9afc7;--line:#ffffff1c;--hot:#d6ff43;--violet:#8c63ff;--panel:#111526d9}*{box-sizing:border-box}body{margin:0;min-height:100vh;color:var(--ink);font:15px/1.4 Inter,ui-sans-serif,system-ui,sans-serif;background:#060814;overflow-x:hidden}body:before{content:"";position:fixed;inset:-30%;z-index:-2;background:radial-gradient(circle at 22% 20%,#6c3eda99,transparent 25%),radial-gradient(circle at 78% 30%,#1e7ce58c,transparent 25%),radial-gradient(circle at 50% 95%,#b6dd2560,transparent 30%);filter:blur(30px);animation:drift 12s ease-in-out infinite alternate}@keyframes drift{to{transform:scale(1.13) rotate(6deg)}}.shell{max-width:1180px;margin:auto;padding:28px 22px 48px}.status{padding:9px 13px;border:1px solid var(--line);border-radius:999px;color:var(--muted);background:#0d1021a8;white-space:nowrap}.stage{position:relative;min-height:240px;overflow:hidden;border:1px solid var(--line);border-radius:25px;background:linear-gradient(135deg,#171841e6,#0d193be6);box-shadow:0 24px 70px #0005;padding:25px;display:flex;align-items:end}.stage:after{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(105deg,transparent 0 11%,#fff1 11.3% 11.7%,transparent 12% 22%);opacity:.35}#rays{position:absolute;inset:0;width:100%;height:100%;opacity:.9}.stage-copy{position:relative;z-index:1;max-width:520px}.stage h2{font-size:clamp(24px,3.6vw,36px);line-height:1.04;letter-spacing:-.05em;margin:0 0 9px}.stage p{color:#d5d8e9;margin:0}.stage code{background:#ffffff14;padding:1px 6px;border-radius:5px;font-size:.85em}.grid{display:grid;grid-template-columns:1.08fr .92fr;gap:16px;margin-top:16px}.card{border:1px solid var(--line);background:var(--panel);backdrop-filter:blur(18px);border-radius:18px;padding:20px}.card h3{margin:0 0 5px;font-size:17px}.card-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:5px}.card-head h3{margin:0}.hint{margin:0 0 15px;color:var(--muted);font-size:13px}.controls{display:flex;gap:9px;flex-wrap:wrap}.btn{appearance:none;border:1px solid #ffffff28;border-radius:10px;color:var(--ink);background:#ffffff0c;padding:10px 14px;font:inherit;font-weight:650;cursor:pointer;transition:.18s}.btn:hover:not(:disabled){transform:translateY(-2px);border-color:#fff7;background:#ffffff1d}.btn.primary{color:#182000;background:var(--hot);border-color:var(--hot)}.btn.violet{background:var(--violet);border-color:var(--violet)}.btn.danger{color:#ffb6bd}.btn:disabled{opacity:.48;cursor:not-allowed}.range-row{display:flex;align-items:center;gap:15px;margin-top:17px}.range-row output{font-weight:750;min-width:36px;color:var(--hot)}input[type=range]{accent-color:var(--hot);width:100%}.network{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:13px}input[type=text]{flex:1;min-width:150px;background:#070a18;border:1px solid var(--line);border-radius:10px;padding:10px;color:var(--ink);font:inherit}.fixtures{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;max-height:320px;overflow:auto}.fixture{padding:11px;border:1px solid var(--line);border-radius:12px;background:#060916a1}.fixture.off{opacity:.5}.fixture-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}.fixture-index{font-size:11px;font-weight:750;color:var(--hot)}.fixture-addr{font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums}.mini-btn{appearance:none;border:1px solid #ffffff28;border-radius:6px;background:#ffffff0c;color:var(--ink);font:inherit;font-size:11px;padding:3px 7px;cursor:pointer;line-height:1.3}.mini-btn:hover:not(:disabled){background:#ffffff1d}.mini-btn:disabled{opacity:.3;cursor:not-allowed}.identify-btn{display:block;width:100%;margin-top:8px;text-align:center}.fixture strong{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fixture small{color:var(--muted);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fixture .note{color:var(--warn,#ffbd5c);font-size:11px;margin-top:3px}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#ff6172;margin-right:5px}.dot.ok{background:var(--hot);box-shadow:0 0 7px var(--hot)}.level-bar{height:4px;border-radius:99px;background:#ffffff13;margin-top:6px;overflow:hidden}.level-bar i{display:block;height:100%;background:var(--hot);transition:width .15s}.level-bar i.warn{background:#ffbd5c}.level-bar i.stale{background:#ffffff3a}.level-read{display:block;font-size:10px;color:var(--muted);margin-top:4px;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.level-read.warn{color:#ffbd5c}.effects{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}.effects .btn{text-align:left;padding:13px}.effects small{display:block;color:var(--muted);font-weight:400;margin-top:2px}.music{margin-top:16px}.music-top{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.meter{height:8px;background:#ffffff13;border-radius:99px;overflow:hidden;margin-top:13px}.meter i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--hot),#50cdff,#c971ff);box-shadow:0 0 16px #8c63ff;transition:width .05s linear}.bands{display:flex;align-items:flex-end;gap:6px;height:64px;margin-top:13px}.band-col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}.band{width:100%;min-height:3px;border-radius:5px 5px 2px 2px;transition:height .05s linear}.band-col b{margin-top:5px;font-size:12px;color:var(--ink)}.band-label{display:flex;gap:6px;margin-top:3px}.band-label span{flex:1;text-align:center;color:var(--muted);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.toast{position:fixed;right:20px;bottom:20px;max-width:380px;padding:12px 15px;border-radius:12px;background:#171b2f;box-shadow:0 12px 35px #0008;border:1px solid var(--line);opacity:0;transform:translateY(10px);pointer-events:none;transition:.2s}.toast.show{opacity:1;transform:none}.toast.error{border-color:#f36b76}.card.span2{grid-column:1/-1}@media(max-width:760px){.grid{grid-template-columns:1fr}.stage{min-height:200px}.shell{padding:18px 14px}.effects{grid-template-columns:1fr}}
 </style></head>
 <body><div class="shell"><section class="stage"><canvas id="rays"></canvas><div class="stage-copy"><h2>DriverPoE / live demo</h2><p>Drives fixtures over <b>Art-Net only</b> — no admin secret, nothing authenticated. Commission each unit in the admin UI first (universe + DMX address + personality); this page reads that patch from the fixture's status and streams to it.</p></div></section><div class="grid">
 <section class="card span2"><div class="card-head"><h3>Network</h3><div class="status" id="status">Ready to scan</div></div><p class="hint">Fixtures are ordered by DMX address — that's also the band order for the sound-reactive mode. ◉ blinks one fixture.</p><div class="network"><input id="broadcast" type="text" placeholder="automatic broadcast — or e.g. 192.168.1.255"><button class="btn violet" id="scan" onclick="scan()">Scan for luminaires</button></div><div class="fixtures" id="fixtures" style="margin-top:13px"><span class="hint">No luminaires discovered yet.</span></div></section>
@@ -11,7 +11,8 @@
 <section class="card"><h3>Demo scenes</h3><p class="hint">Each scene loops until you stop it.</p><div class="effects"><button class="btn" onclick="effect('wave')">〰 Wave<small>Brightness sweeps</small></button><button class="btn" onclick="effect('pulse')">⚡ Pulse<small>Synchronized beats</small></button><button class="btn" onclick="effect('identify')">◉ Point out<small>One lit at a time</small></button></div><div class="controls" style="margin-top:13px"><button class="btn danger" onclick="stopEffect()">Stop scene</button></div></section>
 <section class="card span2"><h3>React to sound</h3><p class="hint">Pick a local audio file; each fixture follows its own frequency band.</p><div class="music"><div class="music-top"><input id="audioFile" type="file" accept="audio/*"><button class="btn primary" id="musicBtn" onclick="toggleMusic()">Listen and follow</button></div><div class="meter"><i id="meter"></i></div><div class="bands" id="bands"></div><div class="band-label" id="bandLabels"></div></div></section></div></div><div class="toast" id="toast"></div>
 <script>
-let devices=[],audio=null,musicAnalysis=null,musicTimer=null,lastSentSig='',musicBusy=false,lastSendAt=0;
+let devices=[],audio=null,musicAnalysis=null,musicTimer=null,lastSentSig='',musicBusy=false,lastSendAt=0,runningEffect=null,commandedUntil=0,senderRunning=true;
+const SRC_LABEL={none:'no DMX source',artnet:'Art-Net',sacn:'sACN',both:'Art-Net + sACN'};
 const $=id=>document.getElementById(id);const BAND_HUES=[210,250,285,320,355,25,45,70,150,190];
 // Visuals redraw fast; the Art-Net stream is server-side and continuous, so
 // the browser only needs to push new target levels a few times a second.
@@ -39,10 +40,41 @@ async function scan(){
   finally{btn.disabled=false}
 }
 
+// d.level is only what we're *commanding* over Art-Net (fire-and-forget).
+// d.reported_* is the fixture's own INFO readback (unauthenticated, a few
+// times a minute). Show the readback at rest; while an effect or music is
+// driving, show the command -- the readback can't track that pace.
+function levelInfo(d){
+  const cmd=d.level||0;
+  if(!senderRunning){   // "Blackout & release" stopped the stream
+    return {w:d.reported_fresh?(d.reported_level||0):0, cls:'stale',
+            text:`${d.reported_fresh?(d.reported_level||0)+'%':'—'} · released to admin`};
+  }
+  const live=!!runningEffect||!!musicTimer||Date.now()<commandedUntil;
+  if(live||!d.reported_fresh){
+    return {w:cmd, cls:d.reported_fresh?'':'stale',
+            text:d.reported_fresh?`${cmd}% · sending`:`${cmd}% · sending, no readback yet`};
+  }
+  const real=d.reported_level||0, src=d.reported_source||'none';
+  const ours=src==='artnet'||src==='both', drift=Math.abs(real-cmd)>8;
+  const flag=drift||(!ours&&cmd>0);
+  return {w:real, cls:flag?'warn':'',
+          text:`${real}% · ${SRC_LABEL[src]||src}${drift?` (sending ${cmd}%)`:''}`};
+}
+
+function paintFixture(i){
+  const d=devices[i];if(!d||!d.controllable)return;
+  const card=$('fixtures').children[i];if(!card)return;
+  const li=levelInfo(d);
+  const bar=card.querySelector('.level-bar i');if(bar){bar.style.width=li.w+'%';bar.className=li.cls;}
+  const rd=card.querySelector('.level-read');if(rd){rd.textContent=li.text;rd.className='level-read '+li.cls;}
+}
+
 function render(){
   let bandN=0;
   $('fixtures').innerHTML=devices.length?devices.map((d)=>{
     const idx=d.controllable?`#${++bandN}`:'—';
+    const li=d.controllable?levelInfo(d):null;
     return `
     <div class="fixture ${d.controllable?'':'off'}">
       <div class="fixture-top">
@@ -51,7 +83,7 @@ function render(){
       </div>
       <strong>${d.serial}</strong>
       <small><i class="dot ${d.poe_ready?'ok':''}"></i>${d.ip}${d.controllable?` · ${d.channels===2?'16-bit':'8-bit'}`:''}</small>
-      ${d.controllable?`<div class="level-bar"><i style="width:${d.level||0}%"></i></div>`:`<div class="note">${d.note||'not on Art-Net'}</div>`}
+      ${li?`<div class="level-bar"><i class="${li.cls}" style="width:${li.w}%"></i></div><small class="level-read ${li.cls}">${li.text}</small>`:`<div class="note">${d.note||'not on Art-Net'}</div>`}
       <button class="btn mini-btn identify-btn" onclick="identifyOne('${d.ip}')" ${d.controllable?'':'disabled'}>◉ Identify</button>
     </div>`;
   }).join(''):'<span class="hint">No luminaires found.</span>';
@@ -63,6 +95,7 @@ function render(){
 }
 
 async function identifyOne(ip){
+  senderRunning=true;
   try{await postJson('/api/identify',{ip});toast('Identify sent.')}catch(e){toast(e.message,true)}
 }
 
@@ -71,26 +104,39 @@ async function group(a,p){
   if(a==='dim'&&p!=null){$('dimmer').value=p;$('level').textContent=p+'%'}
   else if(a==='off'){$('dimmer').value=0;$('level').textContent='0%'}
   else if(a==='on'){$('dimmer').value=100;$('level').textContent='100%'}
+  commandedUntil=Date.now()+2500;   // show the command until the INFO readback catches up
+  senderRunning=true;               // any control action resumes a blacked-out stream
   try{await postJson('/api/group',{action:a,percent:p});pollState()}catch(e){toast(e.message,true)}
 }
 
-async function blackout(){try{await postJson('/api/blackout');$('status').textContent='Blackout — releasing to admin';toast('Stream stopped. Fixtures revert to admin control after their loss timeout.')}catch(e){toast(e.message,true)}}
+async function blackout(){runningEffect=null;senderRunning=false;try{await postJson('/api/blackout');$('status').textContent='Blackout — released to admin';toast('Stream stopped. Fixtures fall back to admin control after their signal-loss timeout.')}catch(e){toast(e.message,true)}pollState()}
 
 async function effect(n){
   if(!controllable().length)return toast('No commissioned fixtures. Scan first.',true);
-  try{await postJson('/api/effects/start',{name:n});$('status').textContent='Scene running: '+n;toast('Scene started. “Stop scene” any time.')}catch(e){toast(e.message,true)}
+  try{await postJson('/api/effects/start',{name:n});runningEffect=n;senderRunning=true;$('status').textContent='Scene running: '+n;toast('Scene started. “Stop scene” any time.')}catch(e){toast(e.message,true)}
 }
-async function stopEffect(){try{await postJson('/api/effects/stop');$('status').textContent='Scene stopped';toast('Stop requested.')}catch(e){toast(e.message,true)}}
+async function stopEffect(){runningEffect=null;try{await postJson('/api/effects/stop');$('status').textContent='Scene stopped';toast('Stop requested.')}catch(e){toast(e.message,true)}}
 
-// Light polling to keep the per-fixture level bars live.
+// Polling keeps the per-fixture bars live: it carries both what we're
+// commanding (d.level, real-time server-side) and the fixture's own INFO
+// readback (d.reported_*, ~2 s). It runs faster while an effect or music
+// is driving so the bars track the show, slower at rest.
 async function pollState(){
   try{const d=await fetch('/api/state').then(r=>r.json());
+    runningEffect=d.effect||null;
+    senderRunning=d.sender_running!==false;
     const byIp={};(d.devices||[]).forEach(x=>byIp[x.ip]=x);
-    devices.forEach(x=>{const u=byIp[x.ip];if(u)x.level=u.level});
-    devices.forEach((x,i)=>{const bar=$('fixtures').children[i]?.querySelector('.level-bar i');if(bar)bar.style.width=(x.level||0)+'%'});
+    devices.forEach((x,i)=>{
+      const u=byIp[x.ip];if(!u)return;
+      x.level=u.level;x.reported_level=u.reported_level;x.reported_source=u.reported_source;x.reported_fresh=u.reported_fresh;
+      paintFixture(i);
+    });
   }catch(e){}
 }
-setInterval(()=>{if(devices.length)pollState()},700);
+(function pollLoop(){
+  const busy=!!runningEffect||!!musicTimer;
+  setTimeout(async()=>{ if(devices.length) await pollState(); pollLoop(); }, busy?200:700);
+})();
 
 function fmtHz(hz){return hz>=1000?(hz/1000).toFixed(hz>=10000?0:1)+'k':Math.round(hz)+''}
 function downmixToMono(buffer){const len=buffer.length,mono=new Float32Array(len),ch=buffer.numberOfChannels;for(let c=0;c<ch;c++){const data=buffer.getChannelData(c);for(let i=0;i<len;i++)mono[i]+=data[i]/ch}return mono}
@@ -123,7 +169,7 @@ async function toggleMusic(){
     audio=new Audio(URL.createObjectURL(f));audio.onended=stopMusic;
     renderBands(c.length);
     await audio.play();
-    lastSendAt=0;lastSentSig='';
+    lastSendAt=0;lastSentSig='';senderRunning=true;
     musicTimer=setInterval(followMusic,VISUAL_INTERVAL_MS);
     btn.textContent='Stop music';
     toast('Reactive mode started.');
@@ -149,6 +195,8 @@ function followMusic(){
     const bar=$('band'+i);if(bar)bar.style.height=pct+'%';
     const val=$('val'+i);if(val)val.textContent=pct+'%';
     items.push({ip:c[i].ip,percent:pct});sum+=pct;
+    // paint the fixture card straight from the frame -- no round trip
+    const di=devices.indexOf(c[i]);if(di>=0){devices[di].level=pct;paintFixture(di);}
   }
   $('meter').style.width=Math.round(sum/n)+'%';
   const now=performance.now(),sig=items.map(it=>it.percent).join(',');
