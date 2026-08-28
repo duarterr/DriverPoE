@@ -54,6 +54,13 @@ typedef enum {
     /** Writes the DMX layer config. Request payload = DMX_CFG_WIRE_SIZE
      * bytes; response payload = status(1). HMAC + nonce. */
     ADMIN_TYPE_DMX_SET_CONFIG = 0x0F, ADMIN_TYPE_DMX_SET_CONFIG_RESP = 0x8F,
+    /** Reads the HV9910 dimming-mode config. Response payload =
+     * DRV_CFG_WIRE_SIZE bytes (see components/driver_config/include/driver_config.h).
+     * HMAC + nonce. */
+    ADMIN_TYPE_DRIVER_GET_CONFIG = 0x10, ADMIN_TYPE_DRIVER_GET_CONFIG_RESP = 0x90,
+    /** Writes the dimming-mode config. Request payload = DRV_CFG_WIRE_SIZE
+     * bytes; response payload = status(1). HMAC + nonce. */
+    ADMIN_TYPE_DRIVER_SET_CONFIG = 0x11, ADMIN_TYPE_DRIVER_SET_CONFIG_RESP = 0x91,
     ADMIN_TYPE_ERR_RESP = 0xFF,
 } admin_pkt_type_t;
 

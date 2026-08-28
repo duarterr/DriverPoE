@@ -3,6 +3,7 @@ idf_component_register(SRCS
                         INCLUDE_DIRS "."
                         PRIV_REQUIRES
                             hv9910
+                            driver_config
                             tps2378
                             voltage_sense
                             eth_init

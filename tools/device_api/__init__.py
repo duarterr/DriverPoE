@@ -30,6 +30,7 @@ from .models import CommandResult, DeviceInfo
 from .protocol import (
     AdminStatus,
     DmxConfig,
+    DriverConfig,
     PacketType,
     ProtocolError,
     ProtocolVersionMismatchError,
@@ -37,7 +38,9 @@ from .protocol import (
     mac_from_str,
     mac_to_str,
     pack_dmx_config,
+    pack_driver_config,
     parse_dmx_config,
+    parse_driver_config,
     serial_from_mac,
 )
 from .secrets import (
@@ -62,11 +65,14 @@ __all__ = [
     "OtaTransferError",
     "AdminStatus",
     "DmxConfig",
+    "DriverConfig",
     "PacketType",
     "ProtocolError",
     "ProtocolVersionMismatchError",
     "pack_dmx_config",
     "parse_dmx_config",
+    "pack_driver_config",
+    "parse_driver_config",
     "ADMIN_DEFAULT_SECRET",
     "KeyfileSecretStore",
     "KeysFileError",

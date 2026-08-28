@@ -16,6 +16,7 @@
 #include "eth_init.h"
 #include "voltage_sense.h"
 #include "dmx_input.h"
+#include "driver_config.h"
 
 #include <string.h>
 #include <inttypes.h>
@@ -474,9 +475,13 @@ static void handle_challenge(int sock, const parsed_header_t *hdr, const struct 
 
 /**
  * @brief Handles ON: enables the driver, or defers it if power isn't confirmed.
+ *
+ * Payload is 4 bytes (a legacy ramp duration) and is accepted but ignored
+ * -- the driver applies every change at once; fades belong to the DMX
+ * layer / lighting console.
  * @param sock UDP socket.
  * @param hdr Parsed request header.
- * @param payload Request payload (ramp_ms).
+ * @param payload Request payload (ignored ramp_ms).
  * @param payload_len Payload length.
  * @param src Source address.
  * @return None.
@@ -485,26 +490,27 @@ static void handle_on(int sock, const parsed_header_t *hdr,
                        const uint8_t *payload, uint16_t payload_len,
                        const struct sockaddr_in *src)
 {
+    (void)payload;
     if (payload_len != 4) {
         send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_ON_RESP, ADMIN_STATUS_ERR_BAD_ARG, devid_get_admin_secret());
         return;
     }
-    uint32_t ramp_ms = get_u32_be(payload);
 
     if (!tps2378_is_ready()) {
         hv9910_set_pending(true, 0);
         send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_ON_RESP, ADMIN_STATUS_ACCEPTED_PENDING, devid_get_admin_secret());
         return;
     }
-    hv9910_enable(ramp_ms);
+    hv9910_enable();
     send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_ON_RESP, ADMIN_STATUS_OK, devid_get_admin_secret());
 }
 
 /**
- * @brief Handles OFF: disables the driver unconditionally.
+ * @brief Handles OFF: disables the driver unconditionally. The 4-byte
+ * payload (a legacy ramp duration) is accepted but ignored.
  * @param sock UDP socket.
  * @param hdr Parsed request header.
- * @param payload Request payload (ramp_ms).
+ * @param payload Request payload (ignored ramp_ms).
  * @param payload_len Payload length.
  * @param src Source address.
  * @return None.
@@ -513,20 +519,22 @@ static void handle_off(int sock, const parsed_header_t *hdr,
                         const uint8_t *payload, uint16_t payload_len,
                         const struct sockaddr_in *src)
 {
+    (void)payload;
     if (payload_len != 4) {
         send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_OFF_RESP, ADMIN_STATUS_ERR_BAD_ARG, devid_get_admin_secret());
         return;
     }
-    uint32_t ramp_ms = get_u32_be(payload);
-    hv9910_disable(ramp_ms);
+    hv9910_disable();
     send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_OFF_RESP, ADMIN_STATUS_OK, devid_get_admin_secret());
 }
 
 /**
- * @brief Handles DIM: sets brightness, or defers turning on if power isn't confirmed.
+ * @brief Handles DIM: sets brightness, or defers turning on if power isn't
+ * confirmed. Payload is percent (1) + a legacy ramp_ms (4, BE) that is
+ * accepted but ignored -- the driver is instantaneous.
  * @param sock UDP socket.
  * @param hdr Parsed request header.
- * @param payload Request payload: percent (1) + ramp_ms (4, BE).
+ * @param payload Request payload: percent (1) + ignored ramp_ms (4).
  * @param payload_len Payload length (5).
  * @param src Source address.
  * @return None.
@@ -540,10 +548,9 @@ static void handle_dim(int sock, const parsed_header_t *hdr,
         return;
     }
     uint8_t percent = payload[0];
-    uint32_t ramp_ms = get_u32_be(payload + 1);
 
     if (percent == 0) {
-        hv9910_disable(ramp_ms);
+        hv9910_disable();
         send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DIM_RESP, ADMIN_STATUS_OK, devid_get_admin_secret());
         return;
     }
@@ -554,8 +561,8 @@ static void handle_dim(int sock, const parsed_header_t *hdr,
         return;
     }
 
-    // enable_at clears the power-cut latch, records the desire, releases SHUTDOWN and ramps.
-    hv9910_enable_at(percent, ramp_ms);
+    // enable_at clears the power-cut latch, records the desire, lights the driver.
+    hv9910_enable_at(percent);
     send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DIM_RESP, ADMIN_STATUS_OK, devid_get_admin_secret());
 }
 
@@ -939,6 +946,50 @@ static void handle_dmx_set_config(int sock, const parsed_header_t *hdr,
 }
 
 /**
+ * @brief Handles DRIVER_GET_CONFIG: returns the serialized dimming config.
+ * @param sock UDP socket.
+ * @param hdr Parsed request header.
+ * @param src Source address.
+ * @return None.
+ */
+static void handle_driver_get_config(int sock, const parsed_header_t *hdr, const struct sockaddr_in *src)
+{
+    driver_config_t cfg;
+    if (!driver_config_get(&cfg)) {
+        send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DRIVER_GET_CONFIG_RESP, ADMIN_STATUS_ERR_INTERNAL, devid_get_admin_secret());
+        return;
+    }
+    uint8_t buf[DRV_CFG_WIRE_SIZE];
+    driver_config_pack(&cfg, buf);
+    send_packet(sock, src, ADMIN_TYPE_DRIVER_GET_CONFIG_RESP, hdr->nonce, buf, sizeof(buf), devid_get_admin_secret());
+}
+
+/**
+ * @brief Handles DRIVER_SET_CONFIG: applies and persists a new dimming config.
+ * @param sock UDP socket.
+ * @param hdr Parsed request header.
+ * @param payload Serialized config (DRV_CFG_WIRE_SIZE bytes).
+ * @param payload_len Payload length.
+ * @param src Source address.
+ * @return None.
+ */
+static void handle_driver_set_config(int sock, const parsed_header_t *hdr,
+                                      const uint8_t *payload, uint16_t payload_len,
+                                      const struct sockaddr_in *src)
+{
+    driver_config_t cfg;
+    if (payload_len != DRV_CFG_WIRE_SIZE || !driver_config_unpack(payload, payload_len, &cfg)) {
+        send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DRIVER_SET_CONFIG_RESP, ADMIN_STATUS_ERR_BAD_ARG, devid_get_admin_secret());
+        return;
+    }
+    if (!driver_config_set(&cfg)) {
+        send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DRIVER_SET_CONFIG_RESP, ADMIN_STATUS_ERR_INTERNAL, devid_get_admin_secret());
+        return;
+    }
+    send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DRIVER_SET_CONFIG_RESP, ADMIN_STATUS_OK, devid_get_admin_secret());
+}
+
+/**
  * @brief Validates, authenticates, and dispatches one received packet.
  * @param sock UDP socket.
  * @param buf Raw packet buffer.
@@ -1031,6 +1082,12 @@ static void handle_packet(int sock, uint8_t *buf, size_t len, const struct socka
         break;
     case ADMIN_TYPE_DMX_SET_CONFIG:
         handle_dmx_set_config(sock, &hdr, payload, hdr.payload_len, src);
+        break;
+    case ADMIN_TYPE_DRIVER_GET_CONFIG:
+        handle_driver_get_config(sock, &hdr, src);
+        break;
+    case ADMIN_TYPE_DRIVER_SET_CONFIG:
+        handle_driver_set_config(sock, &hdr, payload, hdr.payload_len, src);
         break;
     default:
         send_status_resp(sock, src, hdr.nonce, ADMIN_TYPE_ERR_RESP, ADMIN_STATUS_ERR_BAD_ARG, devid_get_admin_secret());
