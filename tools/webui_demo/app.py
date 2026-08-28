@@ -15,6 +15,7 @@ channel takes over again.
 """
 from __future__ import annotations
 
+import math
 import threading
 import time
 from pathlib import Path
@@ -42,6 +43,16 @@ _sender.start()
 # sound-reactive mode uses.
 _fixtures: list[dict] = []
 _fixtures_lock = threading.Lock()
+_last_broadcast: str | None = None       # broadcast addr the last scan used
+
+# Honest per-fixture readback. The Art-Net stream is fire-and-forget, so
+# _sender.all_levels() is only what we're *commanding*. INFO is
+# unauthenticated and reports the real state, so a slow background
+# broadcast poll keeps this fresh without any authenticated call.
+_reported: dict[str, dict] = {}           # ip -> {level, source, driver_on, poe_ready, layer_enabled, ts}
+_reported_lock = threading.Lock()
+_READBACK_TTL = 6.0                       # seconds an INFO sample stays "fresh"
+_readback_misses = 0                      # consecutive readback cycles with no reply (diagnostics)
 
 _effect_stop = threading.Event()
 _effect_lock = threading.Lock()
@@ -115,20 +126,77 @@ def _apply_patch_locked() -> None:
 
 def _fixture_view() -> list[dict]:
     levels = _sender.all_levels()
+    now = time.time()
+    with _reported_lock:
+        rep = {ip: r for ip, r in _reported.items() if now - r["ts"] < _READBACK_TTL}
     with _fixtures_lock:
         out = []
         for f in _fixtures:
-            out.append({**f, "level": levels.get(f["ip"], 0)})
+            r = rep.get(f["ip"])
+            out.append({
+                **f,
+                "level": levels.get(f["ip"], 0),                        # what we're commanding
+                "reported_level": r["level"] if r else None,            # what the fixture reports
+                "reported_source": r["source"] if r else None,          # none|artnet|sacn|both
+                "reported_fresh": r is not None,
+            })
         return out
+
+
+def _readback_loop() -> None:
+    """Background: re-broadcast INFO (unauthenticated) every ~2 s and cache
+    each fixture's real level / active source. This is the only thing that
+    reflects a change made *outside* the demo (admin UI, another console,
+    power loss, signal-loss fallback)."""
+    while not _readback_stop.wait(2.0):
+        with _fixtures_lock:
+            bcast = _last_broadcast if _fixtures else None
+        if not bcast:
+            continue
+        try:
+            found = discovery.broadcast_info(bcast, DEFAULT_PORT, 1.0)
+        except Exception as e:  # never let this thread die silently
+            print(f"[readback] broadcast_info({bcast!r}) failed: {e!r}", flush=True)
+            continue
+        now = time.time()
+        with _reported_lock:
+            for info in found:
+                _reported[info.source_ip] = {
+                    "level": info.dim_percent if info.driver_on else 0,
+                    "source": info.dmx_active_source,
+                    "driver_on": info.driver_on,
+                    "poe_ready": info.poe_ready,
+                    "layer_enabled": info.dmx_layer_enabled,
+                    "ts": now,
+                }
+        global _readback_misses
+        if not found:
+            _readback_misses += 1
+            if _readback_misses in (1, 5, 20) or _readback_misses % 60 == 0:
+                print(f"[readback] no INFO replies on {bcast} "
+                      f"({_readback_misses} cycles) -- fixture bars will show the commanded level only",
+                      flush=True)
+        else:
+            _readback_misses = 0
+
+
+_readback_stop = threading.Event()
+
+
+@app.on_event("startup")
+def _start_readback() -> None:
+    threading.Thread(target=_readback_loop, name="info-readback", daemon=True).start()
 
 
 @app.post("/api/scan")
 def scan(body: ScanRequest):
+    global _last_broadcast
     bcast = body.broadcast or discovery.guess_broadcast_address()
     try:
         found = discovery.broadcast_info(bcast, DEFAULT_PORT, DEFAULT_TIMEOUT)
     except OSError as e:
         raise HTTPException(400, str(e))
+    _last_broadcast = bcast
 
     entries = [_probe_fixture(info) for info in found]
 
@@ -163,11 +231,18 @@ def _controllable_ips() -> list[str]:
         return [f["ip"] for f in _fixtures if f["controllable"]]
 
 
+def _resume_stream() -> None:
+    """Restart the Art-Net stream if 'Blackout & release' had stopped it.
+    Idempotent -- start() is a no-op while the thread is alive."""
+    _sender.start()
+
+
 @app.post("/api/group")
 def group(body: GroupRequest):
     ips = _controllable_ips()
     if not ips:
         raise HTTPException(400, "No commissioned fixtures. Enable the DMX layer in the admin UI, then scan again.")
+    _resume_stream()
     if body.action == "on":
         _sender.set_many([(ip, 100) for ip in ips])
     elif body.action == "off":
@@ -183,6 +258,7 @@ def group(body: GroupRequest):
 
 @app.post("/api/spectrum")
 def spectrum(body: SpectrumRequest):
+    _resume_stream()
     _sender.set_many([(it.ip, it.percent) for it in body.items])
     return {"ok": True}
 
@@ -191,6 +267,7 @@ def spectrum(body: SpectrumRequest):
 def identify(body: IdentifyRequest):
     if body.ip not in _controllable_ips():
         raise HTTPException(400, "fixture not commissioned for Art-Net")
+    _resume_stream()
     threading.Thread(target=_identify_blink, args=(body.ip,), daemon=True).start()
     return {"ok": True}
 
@@ -244,17 +321,28 @@ def _run_effect(name: str) -> None:
                 if _sleep(0.42):
                     break
         elif name == "wave":
-            falloff = 34
-            order = _ping_pong_indices(len(ips))
+            # A soft raised-cosine bump whose centre sweeps smoothly back
+            # and forth. Sub-stepped at ~25 fps with a wide profile and a
+            # dim floor, so it breathes rather than chases.
+            n = len(ips)
+            span = max(1, n - 1)
+            width = max(1.2, n / 3.2)          # how many fixtures the bump spans
+            frames = 64                        # steps per one-way sweep (~2.6 s at 25 fps)
+            pos, direction = 0.0, 1.0
             while not _effect_stop.is_set():
-                for peak in order:
-                    if _effect_stop.is_set():
-                        break
-                    _sender.set_many([
-                        (ip, max(0, 100 - abs(j - peak) * falloff)) for j, ip in enumerate(ips)
-                    ])
-                    if _sleep(0.16):
-                        break
+                out = []
+                for j, ip in enumerate(ips):
+                    d = min(1.0, abs(j - pos) / width)
+                    v = 0.5 * (1.0 + math.cos(d * math.pi))   # 1 at centre -> 0 at width
+                    out.append((ip, round(100 * v)))
+                _sender.set_many(out)
+                pos += direction * span / frames
+                if pos >= span:
+                    pos, direction = float(span), -1.0
+                elif pos <= 0.0:
+                    pos, direction = 0.0, 1.0
+                if _sleep(0.04):
+                    break
     finally:
         with _effect_lock:
             _effect_name = None
@@ -267,6 +355,7 @@ def start_effect(body: EffectRequest):
         raise HTTPException(400, "unknown effect")
     if not _controllable_ips():
         raise HTTPException(400, "No commissioned fixtures.")
+    _resume_stream()
     with _effect_lock:
         if _effect_name:
             raise HTTPException(409, "An effect is already running. Stop it first.")
@@ -321,9 +410,15 @@ async def analyze_music(request: Request, sr: int, n_bands: int):
 
 @app.post("/api/blackout")
 def blackout():
+    """Stop driving entirely: kill any effect, zero the buffers, then stop
+    the Art-Net stream. With no source on the wire each fixture hits its
+    signal-loss timeout and the admin channel takes control back. Any
+    control action (group/effect/spectrum/identify) resumes the stream."""
     _effect_stop.set()
     _sender.set_many([(ip, 0) for ip in _controllable_ips()])
-    return {"ok": True}
+    time.sleep(0.15)   # let a few explicit "0" frames go out before the stream dies
+    _sender.stop()
+    return {"ok": True, "sender_running": _sender.running}
 
 
 @app.get("/")

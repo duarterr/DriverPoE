@@ -172,13 +172,12 @@
         <option value="">Interface...</option>
       </select>
       <input id="bcast" class="field grow" type="text" placeholder="broadcast (auto)">
-      <label class="btn" title="Load an admin keys file (serial / key per line). Held in memory only — nothing is saved.">
+      <label class="btn" title="Load an admin keys file (serial / key per line).">
         Keys file<input type="file" id="keysFile" accept=".txt,.keys,.csv,text/plain" style="display:none" onchange="loadKeysFile(this)">
       </label>
       <button class="btn-accent" id="scanBtn" onclick="scanDevices()">Scan network</button>
     </div>
-    <div class="scan-status" id="scanStatus">Load a keys file, then scan the LAN.</div>
-    <div class="scan-status" id="keysStatus" style="margin-top:4px">No keys loaded — no unit can be commanded. Load a keys file first.</div>
+    <div class="scan-status" id="status">No keys loaded. No unit can be commanded. Load a keys file, then scan the LAN.</div>
   </section>
 
   <section class="card span2 bulk-bar" id="bulkBar">
@@ -316,18 +315,39 @@ window.addEventListener('DOMContentLoaded', () => { loadInterfaces(); checkKeys(
 // line, plus an optional "all others" fallback line); the backend holds
 // it in RAM for the life of the process. Each card then shows whether a
 // working key is available for that unit.
-function renderKeysStatus(k) {
-  const el = document.getElementById('keysStatus');
-  if (k && k.loaded) {
-    el.textContent = `Keys loaded: ${k.count} by serial${k.fallback_count ? ` + ${k.fallback_count} fallback${k.fallback_count === 1 ? '' : 's'} ("all others")` : ''}. Held in memory only. `;
+//
+// One status line: "<keys state> — <scan state>". The two halves are
+// updated independently (checkKeys / loadKeysFile vs scanDevices), so
+// each keeps its piece in a variable and renderStatus() recomposes.
+let keysState = null;
+let scanMsg = 'Load a keys file, then scan the LAN.';
+
+function renderStatus() {
+  const el = document.getElementById('status');
+  const loaded = keysState && keysState.loaded;
+  const keysMsg = loaded
+    ? `Keys loaded: ${keysState.count} by serial${keysState.fallback_count ? ` + ${keysState.fallback_count} fallback${keysState.fallback_count === 1 ? '' : 's'} ("all others")` : ''}.`
+    : 'No keys loaded. No unit can be commanded.';
+  el.textContent = `${keysMsg} ${scanMsg} `;
+  if (loaded) {
     const clear = document.createElement('a');
-    clear.textContent = 'clear';
+    clear.textContent = 'Clear keys';
     clear.href = '#'; clear.style.color = 'var(--danger)';
     clear.onclick = async (e) => { e.preventDefault(); await postJson('/api/keys/clear'); checkKeys(); };
     el.appendChild(clear);
-  } else {
-    el.textContent = 'No keys loaded — no unit can be commanded. Load a keys file first.';
   }
+}
+
+function renderKeysStatus(k) {
+  keysState = k;
+  // nudge the scan half between the two "idle" hints as keys come and go,
+  // but never clobber a real scan result or an in-progress message.
+  if (k && k.loaded && scanMsg === 'Load a keys file, then scan the LAN.') {
+    scanMsg = 'Scan the network.';
+  } else if (!(k && k.loaded) && scanMsg === 'Scan the network.') {
+    scanMsg = 'Load a keys file, then scan the LAN.';
+  }
+  renderStatus();
 }
 
 async function checkKeys() {
@@ -343,10 +363,11 @@ async function loadKeysFile(input) {
   const data = await resp.json().catch(() => ({}));
   input.value = '';
   if (resp.ok) {
+    scanMsg = 'Scan the network.';
     renderKeysStatus(data);
-    document.getElementById('scanStatus').textContent = 'Keys loaded. Scan the network.';
   } else {
-    document.getElementById('keysStatus').textContent = `Keys file rejected: ${data.message || data.detail || resp.status}`;
+    scanMsg = `keys file rejected: ${data.message || data.detail || resp.status}`;
+    renderStatus();
   }
 }
 
@@ -434,7 +455,11 @@ function renderDevices() {
   el.innerHTML = devices.map((d, i) => {
     const power = d.poe_ready ? pill('ready', 'on') : pill(d.power_blocking_reason || 'not ready', 'warn');
     const driver = d.driver_on ? pill(`on ${d.dim_percent}%`, 'on') : pill('off', 'off');
-    const desired = d.desired_on ? pill('on', 'on') : pill('off', 'off');
+    // "pending" only makes sense while power is actually withheld; once
+    // poe_ready is true a desired-on/driver-off gap is just a ramp settling.
+    const desired = !d.desired_on ? pill('off', 'off')
+                    : (!d.driver_on && !d.poe_ready) ? pill('on · pending', 'warn')
+                    : pill('on', 'on');
     const gate = (name, ok) => pill(name, ok ? 'on' : 'err');
     return `
     <div class="card" id="card-${i}">
@@ -456,7 +481,7 @@ function renderDevices() {
         ${row('Power', `${power} &middot; source: ${d.poe_source}`)}
         ${row('Power gates', `${gate('CDB', d.poe_cdb_confirmed)} ${gate('T2P', d.poe_t2p_confirmed)} ${gate('VBUS', d.poe_vbus_confirmed)}`)}
         ${row('Driver (actual)', driver)}
-        ${row('Driver (desired)', `${desired}${(d.desired_on && !d.driver_on) ? '  (pending -- will apply once power is confirmed)' : ''}`)}
+        ${row('Driver (desired)', desired)}
         ${row('Ramp/blink in progress', d.ramp_pending ? pill('yes', 'warn') : pill('no', 'off'))}
         ${row('VBUS', `${d.vbus_mv}mV`)}
         ${row('LED voltage', `${d.led_voltage_mv}mV`)}
@@ -623,29 +648,30 @@ async function bulkChangeSecret() {
 
 async function scanDevices() {
   const btn = document.getElementById('scanBtn');
-  const status = document.getElementById('scanStatus');
   btn.disabled = true;
   btn.textContent = 'Scanning...';
-  status.textContent = 'Scanning network…';
+  scanMsg = 'Scanning the network…';
+  renderStatus();
   try {
     const bcast = document.getElementById('bcast').value.trim();
     const url = '/api/scan' + (bcast ? `?broadcast=${encodeURIComponent(bcast)}` : '');
     const resp = await fetch(url);
     const data = await resp.json();
     devices = data.devices || [];
-    if (data.keys) renderKeysStatus(data.keys);
     for (const k of Object.keys(dmxCfgCache)) delete dmxCfgCache[k];  // re-fetch config fresh each scan
     // indices are only meaningful within one scan's result set -- default
     // to "everything just found" selected, since bulk actions are the
     // common next step right after a scan.
     selectedIndices = new Set(devices.map((_, i) => i));
     renderDevices();
-    status.textContent = devices.length
+    scanMsg = devices.length
       ? `${devices.length} luminaire${devices.length === 1 ? '' : 's'} found.`
-      : 'No unit responded. Try again, or check the broadcast address.';
+      : 'no unit responded — try again, or check the broadcast address.';
+    if (data.keys) renderKeysStatus(data.keys); else renderStatus();
   } catch (e) {
     document.getElementById('devices').innerHTML = `<div class="empty">Scan failed: ${e}</div>`;
-    status.textContent = 'Scan failed.';
+    scanMsg = 'scan failed.';
+    renderStatus();
   } finally {
     btn.disabled = false;
     btn.textContent = 'Scan network';
@@ -785,7 +811,7 @@ async function openDmxDialog(i) {
   dmxDialogIndex = i;
   const dlg = document.getElementById('dmxDialog');
   const msg = document.getElementById('dmxDialogMsg');
-  document.getElementById('dmxDialogTitle').textContent = `DMX settings -- ${d.serial}`;
+  document.getElementById('dmxDialogTitle').textContent = `DMX settings - ${d.serial}`;
   msg.textContent = 'Loading current config from the device...';
   dlg.showModal();
 
