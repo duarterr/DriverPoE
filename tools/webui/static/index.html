@@ -111,6 +111,10 @@
     background: #070a18; color: var(--fg); font: inherit; font-size: 13px;
   }
   .dmx-form h4 { grid-column: 1 / -1; margin: 6px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--hot); }
+  .dmx-form .hint { grid-column: 1 / -1; font-size: 11px; color: var(--muted); margin-top: -2px; }
+  /* both config dialogs the same width -- the 2-column form + dialog padding */
+  #dmxDialog, #dimmingDialog { max-width: 496px; }
+  #dmxDialog .sub, #dimmingDialog .sub { max-width: 460px; }
   .card .info { margin: 8px 0 4px; }
   .info details.more > summary { cursor: pointer; color: var(--muted); font-size: 11px; list-style: none; padding: 3px 0; user-select: none; }
   .info details.more > summary::-webkit-details-marker { display: none; }
@@ -282,30 +286,24 @@
   <form method="dialog" onsubmit="return false">
     <h2 style="margin:0 0 4px;font-size:16px;" id="dimmingDialogTitle">Dimming settings</h2>
     <div class="sub" style="color:var(--muted);font-size:12px;margin-bottom:10px;">
-      HV9910 dimming strategy. The device clamps out-of-range values. Every level change is
-      applied at once -- fades come from the DMX layer / console.
+      Dimming strategy. The device clamps out-of-range values. Every level change is
+      applied at once. Fades come from the DMX layer / console.
     </div>
     <div class="dmx-form">
       <label class="full">Dimming mode
         <select id="drv-mode">
-          <option value="2">Hybrid - analog above the crossover, PWM below</option>
-          <option value="1">Analog - modulate LD, flicker-free, loses accuracy below ~10%</option>
-          <option value="0">PWM - chop PWMD, linear photometry, stable colour temp</option>
+          <option value="2">Hybrid (analog + PWM)</option>
+          <option value="1">Analog (LD only)</option>
+          <option value="0">PWM (PWMD only)</option>
         </select>
       </label>
 
-      <h4>PWM path (PWMD) - modes PWM &amp; Hybrid</h4>
+      <h4>PWM path (PWM &amp; Hybrid)</h4>
       <label>Frequency (Hz, 1000-5000)<input type="number" id="drv-pwm_freq_hz" min="1000" max="5000" step="100"></label>
       <label>Min on-time (us, 2-200)<input type="number" id="drv-min_on_time_us" min="2" max="200"></label>
-      <div class="full" style="font-size:11px;color:var(--muted);line-height:1.4;">
-        The HV9910 switches internally at ~120-170 kHz; a PWMD pulse must last long enough
-        for its inductor current to settle (~2-3 internal cycles) or the LED gets a stunted,
-        nonlinear flash. Min on-time is that floor. It sets the smallest non-zero level:
-        <b><span id="drv-minstep">-</span></b> (= min on-time x frequency). Below that the
-        output snaps straight to 0 -- reaching 0 is always possible, sitting just above it is not.
-      </div>
+      <div class="hint">Smallest non-zero level: <b id="drv-minstep">-</b> (= min on-time x frequency; below it the output snaps to 0)</div>
 
-      <h4>Analog path (LD) - modes Analog &amp; Hybrid</h4>
+      <h4>Analog path (Analog &amp; Hybrid)</h4>
       <label>Frequency (Hz, 40000-80000)<input type="number" id="drv-analog_freq_hz" min="40000" max="80000" step="1000"></label>
 
       <h4>Hybrid</h4>
@@ -329,6 +327,10 @@
 // ----------------------------------------------------------------------
 let devices = [];
 let selectedIndices = new Set(); // survives renderDevices() rebuilds -- selection state lives here, not in the DOM
+const moreOpen = new Set(); // which "more" sections are expanded, keyed "<serial>|<section>" -- survives re-renders
+function onMoreToggle(el) {
+  if (el.open) moreOpen.add(el.dataset.k); else moreOpen.delete(el.dataset.k);
+}
 
 // Broadcast-address dropdown -- lists each local network interface's own
 // broadcast address (computed server-side from IP+netmask, see app.py's
@@ -501,8 +503,7 @@ function dimmingCfgRows(d) {
   const mode = d.dimming_mode ?? 2;
   let out = row('Mode', pill(DRIVER_MODE[mode] ?? mode, 'on'));
   if (mode === 0 || mode === 2) {
-    const step = ((d.dimming_min_on_time_us ?? 0) * (d.dimming_pwm_freq_hz ?? 0) / 1e4).toFixed(1);
-    out += row('PWM path', `${d.dimming_pwm_freq_hz ?? 0} Hz · ${d.dimming_min_on_time_us ?? 0} us min on-time (min step ${step}%)`);
+    out += row('PWM path', `${d.dimming_pwm_freq_hz ?? 0} Hz · ${d.dimming_min_on_time_us ?? 0} us min on-time`);
   }
   if (mode === 1 || mode === 2) out += row('Analog path', `${d.dimming_analog_freq_hz ?? 0} Hz`);
   if (mode === 2) out += row('Crossover', `${d.dimming_crossover_pct ?? 0}%`);
@@ -542,7 +543,7 @@ function renderDevices() {
         ${row('Uptime', `${d.uptime_s}s`)}
         ${row('Power', `${power} &middot; source: ${d.poe_source}`)}
         ${row('Driver (actual)', driver)}
-        <details class="more">
+        <details class="more" data-k="${d.serial}|status" ${moreOpen.has(d.serial + '|status') ? 'open' : ''} ontoggle="onMoreToggle(this)">
           <summary>more</summary>
           ${row('Last reset reason', d.reset_reason)}
           ${row('Power gates', `${gate('CDB', d.poe_cdb_confirmed)} ${gate('T2P', d.poe_t2p_confirmed)} ${gate('VBUS', d.poe_vbus_confirmed)}`)}
@@ -591,7 +592,7 @@ function renderDevices() {
         ${row('Status', d.dmx_layer_enabled ? pill('enabled', 'on') : pill('disabled', 'off'))}
         ${row('DMX level', `${d.dmx_level ?? 0}%`)}
         ${row('Frame rate', `${d.dmx_fps ?? 0}/s`)}
-        <details class="more">
+        <details class="more" data-k="${d.serial}|dmx" ${moreOpen.has(d.serial + '|dmx') ? 'open' : ''} ontoggle="onMoreToggle(this)">
           <summary>more</summary>
           ${row('Live source', dmxSourcePill(d.dmx_active_source))}
           ${row('Last source IP', d.dmx_last_src_ip || '-')}
@@ -981,13 +982,18 @@ document.getElementById('dmxDialogSave').addEventListener('click', async () => {
 // only the Save is authenticated (same 401 -> prompt -> retry as DMX).
 let dimmingDialogIndex = null;
 
+// "smallest non-zero level" = min_on_time_us * pwm_freq_hz, as a percent.
 function updateMinStep() {
+  const el = document.getElementById('drv-minstep');
+  if (!el) return;
   const f = parseInt(document.getElementById('drv-pwm_freq_hz').value, 10) || 0;
   const t = parseInt(document.getElementById('drv-min_on_time_us').value, 10) || 0;
-  document.getElementById('drv-minstep').textContent = (f * t / 1e4).toFixed(1) + '%';
+  el.textContent = (f * t / 1e4).toFixed(1) + '%';
 }
-['drv-pwm_freq_hz', 'drv-min_on_time_us'].forEach(id =>
-  document.getElementById(id).addEventListener('input', updateMinStep));
+['drv-pwm_freq_hz', 'drv-min_on_time_us'].forEach(id => {
+  const e = document.getElementById(id);
+  if (e) e.addEventListener('input', updateMinStep);
+});
 
 function openDimmingDialog(i) {
   const d = devices[i];
