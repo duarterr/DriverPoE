@@ -498,6 +498,10 @@ function dmxCfgRows(ip, d) {
 const DRIVER_MODE = { 0: 'PWM', 1: 'Analog', 2: 'Hybrid' };
 
 function dimmingCfgRows(d) {
+  // pre-1.3.0 firmware doesn't report this block -- all zeros.
+  if (!d.dimming_pwm_freq_hz && !d.dimming_analog_freq_hz) {
+    return row('Config', '<span class="label">not reported by this firmware</span>');
+  }
   const mode = d.dimming_mode ?? 2;
   let out = row('Mode', pill(DRIVER_MODE[mode] ?? mode, 'on'));
   if (mode === 0 || mode === 2) {
@@ -992,12 +996,13 @@ function updateMinStep() {
 function openDimmingDialog(i) {
   const d = devices[i];
   dimmingDialogIndex = i;
+  // fall back to defaults if the fields are absent (older firmware -> 0).
   const set = (id, v) => { document.getElementById(id).value = v; };
-  set('drv-mode', d.dimming_mode ?? 2);
-  set('drv-pwm_freq_hz', d.dimming_pwm_freq_hz ?? 2000);
-  set('drv-min_on_time_us', d.dimming_min_on_time_us ?? 20);
-  set('drv-analog_freq_hz', d.dimming_analog_freq_hz ?? 60000);
-  set('drv-crossover_pct', d.dimming_crossover_pct ?? 20);
+  set('drv-mode', d.dimming_pwm_freq_hz ? (d.dimming_mode ?? 2) : 2);
+  set('drv-pwm_freq_hz', d.dimming_pwm_freq_hz || 2000);
+  set('drv-min_on_time_us', d.dimming_min_on_time_us || 20);
+  set('drv-analog_freq_hz', d.dimming_analog_freq_hz || 60000);
+  set('drv-crossover_pct', d.dimming_crossover_pct || 20);
   updateMinStep();
   document.getElementById('dimmingDialogTitle').textContent = `Dimming settings - ${d.serial}`;
   document.getElementById('dimmingDialogMsg').textContent = '';

@@ -284,7 +284,10 @@ class TestInfoPayload(unittest.TestCase):
         with self.assertRaises(ProtocolError):
             parse_info_payload(b"\x00" * 10)
         with self.assertRaises(ProtocolError):
-            parse_info_payload(b"\x00" * 64)   # the pre-dimming-block layout is no longer accepted
+            parse_info_payload(b"\x00" * 48)   # the pre-DMX-block layout is no longer accepted
+        # a 64-byte INFO (firmware without the dimming block) is still accepted
+        # so an un-upgraded unit stays discoverable / OTA-able:
+        self.assertEqual(parse_info_payload(self._build_payload()[:64])["dimming_mode"], 0)
 
     def test_unknown_enums_fall_back_to_numeric_string(self):
         payload = self._build_payload(reset_reason=250, poe_source=99)
