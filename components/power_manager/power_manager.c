@@ -73,6 +73,7 @@ static void evaluate(void)
 
     bool full_capable = (src == TPS2378_SOURCE_TYPE2 || src == TPS2378_SOURCE_AUX);
     bool blocked = false;
+    bool capped = false;   /* the Type-1-budget restriction is in force (even if poe_cap_pct is 100) */
     uint8_t scale = 100;
 
     switch (cfg.power_mode) {
@@ -80,18 +81,22 @@ static void evaluate(void)
         /* AUX would stay at 100% here, but tps2378 has no APD GPIO yet, so a
          * bench supply reports as TYPE2 and gets capped like a real Type-2
          * PSE -- acceptable for a "force the PoE budget" mode. */
-        scale = (src == TPS2378_SOURCE_AUX) ? 100 : cfg.poe_cap_pct;
+        if (src != TPS2378_SOURCE_AUX) {
+            scale = cfg.poe_cap_pct;
+            capped = true;
+        }
         break;
     case DRV_POWER_POE_PLUS_REQUIRED:
-        if (full_capable) {
-            scale = 100;
-        } else {
+        if (!full_capable) {
             blocked = true;
         }
         break;
     case DRV_POWER_AUTO:
     default:
-        scale = full_capable ? 100 : cfg.poe_cap_pct;
+        if (!full_capable) {
+            scale = cfg.poe_cap_pct;
+            capped = true;
+        }
         break;
     }
 
@@ -105,9 +110,12 @@ static void evaluate(void)
 
     s_scale_pct = scale;
     hv9910_set_output_scale(scale);
-    s_state = (scale < 100) ? POWER_MANAGER_ACTIVE_CAPPED : POWER_MANAGER_ACTIVE_FULL;
-    ESP_LOGI(TAG, "Active: %s, LD scale %u%% (%u.%02u W budget)",
-             tps2378_source_name(src), (unsigned)scale,
+    /* CAPPED reflects "restricted to the Type-1 budget", not whether the
+     * number happens to be < 100 -- an operator who sets poe_cap_pct = 100
+     * on a Type-1 fixture is running over budget and should still see it. */
+    s_state = capped ? POWER_MANAGER_ACTIVE_CAPPED : POWER_MANAGER_ACTIVE_FULL;
+    ESP_LOGI(TAG, "Active: %s, LD scale %u%%%s (%u.%02u W budget)",
+             tps2378_source_name(src), (unsigned)scale, capped ? " [Type-1 cap]" : "",
              (unsigned)(s_budget_cw / 100), (unsigned)(s_budget_cw % 100));
 
     /* Bring the LED up only if the network has asked for it this session. */
