@@ -431,9 +431,9 @@ async function loadKeysFile(input) {
 }
 
 function authPill(auth) {
-  if (auth === 'key') return pill('authenticated', 'on');
-  if (auth === 'default') return pill('factory default', 'warn');
-  if (auth === 'none') return pill('no key', 'err');
+  if (auth === 'key') return pill('Authenticated', 'on');
+  if (auth === 'default') return pill('Factory default', 'warn');
+  if (auth === 'none') return pill('No key', 'err');
   return pill('?', 'off');
 }
 
@@ -441,9 +441,10 @@ function pill(text, cls) { return `<span class="pill ${cls}">${text}</span>`; }
 function row(label, value) { return `<div class="row"><span class="label">${label}</span> <span>${value}</span></div>`; }
 
 function dmxSourcePill(src) {
-  if (src === 'artnet' || src === 'sacn') return pill(src, 'on');
-  if (src === 'both') return pill('art-net + sacn', 'on');
-  return pill('none', 'off');
+  if (src === 'artnet') return pill('Art-Net', 'on');
+  if (src === 'sacn') return pill('sACN', 'on');
+  if (src === 'both') return pill('Art-Net + sACN', 'on');
+  return pill('None', 'off');
 }
 // Friendly label for the INFO poe_source byte (protocol: none/type1/type2/aux).
 function poeSourceLabel(src) {
@@ -451,7 +452,7 @@ function poeSourceLabel(src) {
     type1: ['PoE',  '802.3af, 12.95 W (T2P clear)'],
     type2: ['PoE+', '802.3at or AUX, 25.5 W (T2P set)'],
     aux:   ['AUX',  'bench supply, 25.5 W'],
-    none:  ['none', 'not powered (VBUS below operating threshold)'],
+    none:  ['None', 'not powered (VBUS below operating threshold)'],
   }[src];
   if (!m) return `<span>${src}</span>`;
   return `<span title="${m[1]}">${m[0]}</span>`;
@@ -459,8 +460,10 @@ function poeSourceLabel(src) {
 // Effective power-manager state, appended to the Power row.
 function powerStateSuffix(d) {
   switch (d.power_state_name) {
-    case 'full':    return ` &middot; ${pill('full power', 'on')}`;
-    case 'capped':  return ` &middot; ${pill(`capped ${d.power_effective_scale_pct}%`, 'warn')}`;
+    case 'full':    return ` &middot; ${pill('Full power', 'on')}`;
+    case 'capped':  return (d.power_effective_scale_pct ?? 100) >= 100
+                      ? ` &middot; ${pill('Type-1 &mdash; no cap set', 'err')}`
+                      : ` &middot; ${pill(`Capped ${d.power_effective_scale_pct}%`, 'warn')}`;
     case 'blocked': return ` &middot; ${pill('PoE+ required', 'err')}`;
     default:        return '';
   }
@@ -477,7 +480,7 @@ function artnetParts(pa) {
 const dmxCfgCache = {};
 const DMX_PERSONALITY = { 0: '1 ch - intensity 8-bit', 1: '2 ch - intensity 16-bit' };
 const DMX_MERGE = { 0: 'HTP', 1: 'LTP' };
-const DMX_LOSS = { 0: 'hold last level', 1: 'fade to black', 2: 'fade to set level' };
+const DMX_LOSS = { 0: 'Hold last level', 1: 'Fade to black', 2: 'Fade to set level' };
 
 async function loadDmxCfg(ip) {
   if (dmxCfgCache[ip] !== undefined) return;
@@ -503,7 +506,7 @@ function dmxCfgRows(ip, d) {
   if (cfg === 'unavailable') {
     // Fall back to the patch fields INFO carries unauthenticated.
     const pm = d.dmx_proto_mask ?? 0;
-    const protos = [pm & 1 && 'Art-Net', pm & 2 && 'sACN'].filter(Boolean).join(' + ') || 'none';
+    const protos = [pm & 1 && 'Art-Net', pm & 2 && 'sACN'].filter(Boolean).join(' + ') || 'None';
     return row('Protocols', protos)
          + row('Art-Net universe', `${artnetParts(d.dmx_artnet_port_address ?? 0)} (0x${(d.dmx_artnet_port_address ?? 0).toString(16).padStart(4,'0')})`)
          + row('sACN universe', `${d.dmx_sacn_universe ?? 0}`)
@@ -515,7 +518,7 @@ function dmxCfgRows(ip, d) {
   if (cfg.proto_mask & 1) protos.push('Art-Net');
   if (cfg.proto_mask & 2) protos.push('sACN');
   const loss = DMX_LOSS[cfg.loss_behavior] + (cfg.loss_behavior === 2 ? ` (${cfg.loss_level}%)` : '') + `, ${cfg.loss_timeout_ms}ms`;
-  return row('Protocols', protos.join(' + ') || '<span class="label">none</span>')
+  return row('Protocols', protos.join(' + ') || '<span class="label">None</span>')
        + row('Art-Net universe', `net ${cfg.artnet_net} / sub ${cfg.artnet_subnet} / uni ${cfg.artnet_universe} (0x${cfg.artnet_port_address.toString(16).padStart(4,'0')})`)
        + row('sACN universe', `${cfg.sacn_universe}`)
        + row('DMX start address', `${cfg.dmx_address}`)
@@ -523,7 +526,7 @@ function dmxCfgRows(ip, d) {
        + row('Merge mode', DMX_MERGE[cfg.merge_mode] ?? cfg.merge_mode)
        + row('Inter-frame smoothing', `${cfg.smoothing_ms}ms`)
        + row('On signal loss', loss)
-       + row('Accept ArtAddress', cfg.allow_artaddress ? pill('yes', 'on') : pill('no', 'off'));
+       + row('Accept ArtAddress', cfg.allow_artaddress ? pill('Yes', 'on') : pill('No', 'off'));
 }
 
 // HV9910 dimming mode. The current config rides along in the unauthenticated
@@ -551,18 +554,18 @@ function renderDevices() {
     return;
   }
   el.innerHTML = devices.map((d, i) => {
-    const power = d.poe_ready ? pill('ready', 'on') : pill(d.power_blocking_reason || 'not ready', 'warn');
-    const driver = d.driver_on ? pill(`on ${d.dim_percent}%`, 'on') : pill('off', 'off');
+    const power = d.poe_ready ? pill('Ready', 'on') : pill(d.power_blocking_reason || 'Not ready', 'warn');
+    const driver = d.driver_on ? pill(`On ${d.dim_percent}%`, 'on') : pill('Off', 'off');
     // "pending" only makes sense while power is actually withheld; once
     // poe_ready is true a desired-on/driver-off gap is just the output settling.
-    const desired = !d.desired_on ? pill('off', 'off')
-                    : (!d.driver_on && !d.poe_ready) ? pill('on · pending', 'warn')
-                    : pill('on', 'on');
+    const desired = !d.desired_on ? pill('Off', 'off')
+                    : (!d.driver_on && !d.poe_ready) ? pill('On · pending', 'warn')
+                    : pill('On', 'on');
     const gate = (name, ok) => pill(name, ok ? 'on' : 'err');
     // CDB = hotswap inrush done, T2P = Type-1 vs Type-2/AUX class; neither
     // gates readiness (VBUS alone does), so don't paint them as errors.
     const poeSignals = d =>
-        `<span title="hotswap inrush / bulk cap">${d.poe_cdb_confirmed ? pill('inrush done', 'on') : pill('inrush', 'warn')}</span> `
+        `<span title="hotswap inrush / bulk cap">${d.poe_cdb_confirmed ? pill('Inrush done', 'on') : pill('Inrush', 'warn')}</span> `
       + `<span title="T2P class selector">${d.poe_t2p_confirmed ? pill('Type-2/AUX', 'on') : pill('Type-1', 'off')}</span> `
       + `<span title="the power gate">${gate('VBUS', d.poe_vbus_confirmed)}</span>`;
     return `
@@ -629,7 +632,7 @@ function renderDevices() {
 
       <div class="section-label">DMX / Art-Net / sACN</div>
       <div class="info">
-        ${row('Status', d.dmx_layer_enabled ? pill('enabled', 'on') : pill('disabled', 'off'))}
+        ${row('Status', d.dmx_layer_enabled ? pill('Enabled', 'on') : pill('Disabled', 'off'))}
         ${row('DMX level', `${d.dmx_level ?? 0}%`)}
         ${row('Frame rate', `${d.dmx_fps ?? 0}/s`)}
         <details class="more" data-k="${d.serial}|dmx" ${moreOpen.has(d.serial + '|dmx') ? 'open' : ''} ontoggle="onMoreToggle(this)">
@@ -863,9 +866,10 @@ async function cmd(i, action, extra) {
       // the message out right after showMsg() set it, well before its
       // 2s auto-hide timer ever got a chance to run it out naturally.
       await refreshOne(i);
-      if (data.applied) showMsg(i, `${action}: applied.`, true);
-      else if (data.pending) showMsg(i, `${action}: accepted, will apply once power is confirmed.`, true);
-      else showMsg(i, `${action}: refused (${data.status}).`, false);
+      const Action = action.charAt(0).toUpperCase() + action.slice(1);
+      if (data.applied) showMsg(i, `${Action}: applied.`, true);
+      else if (data.pending) showMsg(i, `${Action}: accepted, will apply once power is confirmed.`, true);
+      else showMsg(i, `${Action}: refused (${data.status}).`, false);
       return;
     }
     if (status === 401 && data.error === 'auth_needed' && attempt === 0) {
