@@ -61,17 +61,18 @@ class TestDeviceInfo(unittest.TestCase):
     def test_power_blocking_reason_none_when_ready(self):
         self.assertIsNone(_info(poe_ready=True).power_blocking_reason)
 
-    def test_power_blocking_reason_cdb(self):
-        info = _info(poe_ready=False, poe_cdb_confirmed=False, poe_t2p_confirmed=False, poe_vbus_confirmed=False)
-        self.assertIn("CDB", info.power_blocking_reason)
-
-    def test_power_blocking_reason_t2p(self):
-        info = _info(poe_ready=False, poe_cdb_confirmed=True, poe_t2p_confirmed=False, poe_vbus_confirmed=False)
-        self.assertIn("T2P", info.power_blocking_reason)
-
     def test_power_blocking_reason_vbus(self):
-        info = _info(poe_ready=False, poe_cdb_confirmed=True, poe_t2p_confirmed=True, poe_vbus_confirmed=False)
+        info = _info(poe_ready=False, poe_vbus_confirmed=False)
         self.assertIn("VBUS", info.power_blocking_reason)
+
+    def test_power_blocking_reason_ignores_cdb_and_t2p(self):
+        # A valid Type-1 unit runs with T2P clear; CDB/T2P must not be
+        # reported as a blocking reason -- only VBUS gates readiness.
+        info = _info(poe_ready=False, poe_cdb_confirmed=False, poe_t2p_confirmed=False,
+                     poe_vbus_confirmed=True)
+        reason = info.power_blocking_reason
+        self.assertNotIn("CDB", reason)
+        self.assertNotIn("T2P", reason)
 
 
 class TestCommandResult(unittest.TestCase):

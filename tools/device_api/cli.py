@@ -73,7 +73,8 @@ def print_info(info: DeviceInfo) -> None:
     print(f"PoE ready:            {info.poe_ready} (source: {info.poe_source})")
     if not info.poe_ready:
         print(f"  Blocked on:          {info.power_blocking_reason}")
-        print(f"  CDB/T2P/VBUS ok:     {info.poe_cdb_confirmed}/{info.poe_t2p_confirmed}/{info.poe_vbus_confirmed}")
+        print(f"  inrush/class/VBUS:   {info.poe_cdb_confirmed}/{info.poe_t2p_confirmed}/{info.poe_vbus_confirmed}"
+              f"  (CDB=inrush done, T2P=Type-2/AUX class, VBUS=at operating level)")
     print(f"Power mode:            {info.power_mode_name} (cap {info.poe_cap_pct}%)")
     print(f"Power state:          {info.power_state_name}"
           f" (LD scale {info.power_effective_scale_pct}%, budget {info.power_budget_w:g} W)")

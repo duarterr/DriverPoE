@@ -77,6 +77,9 @@ static void evaluate(void)
 
     switch (cfg.power_mode) {
     case DRV_POWER_POE_ONLY:
+        /* AUX would stay at 100% here, but tps2378 has no APD GPIO yet, so a
+         * bench supply reports as TYPE2 and gets capped like a real Type-2
+         * PSE -- acceptable for a "force the PoE budget" mode. */
         scale = (src == TPS2378_SOURCE_AUX) ? 100 : cfg.poe_cap_pct;
         break;
     case DRV_POWER_POE_PLUS_REQUIRED:

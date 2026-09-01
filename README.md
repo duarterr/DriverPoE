@@ -17,9 +17,9 @@ The product is Ethernet/PoE only: no Wi-Fi, no Bluetooth, no Matter. Two control
 
 ## How it works
 
-On boot, the LED driver starts off. The firmware watches the TPS2378's signals and VBUS voltage. It only considers power valid once a source is detected and the bus is above 40 V. If power drops, it disables the driver immediately.
+On boot, the LED driver starts off. The firmware watches VBUS (and, for telemetry only, the TPS2378's CDB and T2P pins). Power is valid once **VBUS is above 40 V** (debounced, with hysteresis) — that is the single gate and the backstop: a source that can't sustain the load drops VBUS and the driver goes off. CDB just marks the hotswap inrush as complete; T2P selects the class (clear → Type-1 12.95 W, set → Type-2/AUX 25.5 W) but never gates readiness, since a valid Type-1 luminaire runs with T2P clear.
 
-Ethernet only starts once power is confirmed; from there the firmware starts the administrative UDP channel and the DMX layer. The LED stays off until a network command lights it — a restart is not remembered. It does come back on by itself after a *power blip* (power lost then reconfirmed) if it was on when power dropped, and it comes on once power is confirmed if an `ON`/`DIM` arrived while power wasn't ready yet (see "Administrative channel" below) — both are volatile, in-RAM intent, not stored. `INFO` always reports the exact reason for a pending block (CDB/T2P/VBUS), even though today it's only reachable once power has already been confirmed.
+Ethernet only starts once power is confirmed; from there the firmware starts the administrative UDP channel and the DMX layer. The LED stays off until a network command lights it — a restart is not remembered. It does come back on by itself after a *power blip* (power lost then reconfirmed) if it was on when power dropped, and it comes on once power is confirmed if an `ON`/`DIM` arrived while power wasn't ready yet (see "Administrative channel" below) — both are volatile, in-RAM intent, not stored. `INFO` reports whether VBUS has reached the operating threshold (the only thing that gates readiness), even though today it's only reachable once power has already been confirmed.
 
 | Indicator | GPIO | Meaning |
 | --- | --- | --- |
@@ -143,7 +143,7 @@ Reaching level 0 in any mode drives PWMD to 0. There is no fade engine — every
 
 ### Power policy (PoE vs PoE+)
 
-`components/power_manager/` maps the negotiated PoE class (`tps2378`: Type-1 12.95 W / Type-2 25.5 W / AUX) and a configured **power mode** to the HV9910 output:
+`components/power_manager/` maps the power class (`tps2378`, from the T2P selector: Type-1 12.95 W when clear, Type-2/AUX 25.5 W when set) and a configured **power mode** to the HV9910 output:
 
 | Power mode | Type-2 / AUX | Type-1 (PoE) |
 | --- | --- | --- |
