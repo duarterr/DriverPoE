@@ -72,6 +72,23 @@ void hv9910_init(const hv9910_config_t *config);
 void hv9910_set_dimming(const hv9910_dimming_t *p);
 
 /**
+ * @brief Sets a global scale on the LD (linear-dimming / peak-current)
+ * output, applied under every level and every dimming mode. Used by the
+ * power manager to cap the fixture to the Type-1 PoE budget: the commanded
+ * 0-100 scale is unchanged, only the peak LED current is reduced. PWMD is
+ * not touched, so full dimming depth is preserved. 100 = no cap.
+ * @param percent LD scale, 1-100 (clamped).
+ * @return None.
+ */
+void hv9910_set_output_scale(uint8_t percent);
+
+/**
+ * @brief Gets the current LD output scale.
+ * @return Scale in percent, 1-100 (100 = no cap).
+ */
+uint8_t hv9910_get_output_scale_pct(void);
+
+/**
  * @brief Enables the driver at the last level commanded this boot, or at
  * 100% if no level has been set yet.
  * @return None.
@@ -141,12 +158,6 @@ void hv9910_identify(void);
  * @return None.
  */
 void hv9910_set_pending(bool on, uint8_t remember_pct);
-
-/**
- * @brief Reports whether an identify blink is currently in progress.
- * @return true if a deferred action is pending.
- */
-bool hv9910_is_ramp_pending(void);
 
 /**
  * @brief Gets the currently applied brightness.

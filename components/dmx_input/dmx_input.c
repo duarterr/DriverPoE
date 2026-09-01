@@ -32,6 +32,7 @@
 
 #include "hv9910.h"
 #include "tps2378.h"
+#include "power_manager.h"
 
 static const char *TAG = "DMX_IN";
 
@@ -418,7 +419,7 @@ static void merge_tick(void)
     if (live == 0) {
         /* Signal lost: apply the configured behavior exactly once, then
          * stop driving so the admin channel regains control. */
-        if (!s_loss_applied && s_last_applied_pct >= 0) {
+        if (!s_loss_applied && s_last_applied_pct >= 0 && power_manager_output_allowed()) {
             if (cfg.loss_behavior == DMX_LOSS_TO_BLACK) {
                 hv9910_disable();
             } else if (cfg.loss_behavior == DMX_LOSS_TO_LEVEL) {
@@ -477,7 +478,7 @@ static void merge_tick(void)
     /* Rate-cap actuation and skip no-op repeats. */
     bool due = (now - s_last_actuate_us) >= (ACTUATE_INTERVAL_MS * 1000);
     if ((pct != s_last_applied_pct || s_last_applied_pct < 0) && due) {
-        if (tps2378_is_ready()) {
+        if (tps2378_is_ready() && power_manager_output_allowed()) {
             if (hv9910_is_enabled()) {
                 /* set_dim follows the level: pct 0 drives PWMD low (an
                  * RC-filtered LD alone cannot extinguish the HV9910). */
@@ -489,7 +490,8 @@ static void merge_tick(void)
             s_last_applied_pct = pct;
             s_last_actuate_us = now;
         }
-        /* If power isn't ready we just don't actuate; we'll catch up when it returns. */
+        /* If power isn't ready (or the power policy is holding the LED off) we
+         * just don't actuate; we'll catch up when that clears. */
     }
 
     xSemaphoreTake(s_cfg_lock, portMAX_DELAY);

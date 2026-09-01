@@ -48,6 +48,7 @@ static uint32_t s_crossover_q   = HV9910_Q_ONE / 5;   /* derived from crossover_
 static uint32_t s_min_on_frac_q = 0;                  /* derived from min_on_time_us x pwm_freq_hz */
 static uint32_t s_ld_full   = 1u << 10;               /* LEDC duty for 100% on the LD timer */
 static uint32_t s_pwmd_full = 1u << 10;               /* LEDC duty for 100% on the PWMD timer */
+static uint32_t s_output_scale_q = HV9910_Q_ONE;      /* global LD-reference cap (power_manager); Q_ONE = no cap */
 
 /* --- driver state ------------------------------------------------------- */
 static volatile bool s_enabled = false;              /* LED currently lit */
@@ -68,6 +69,7 @@ typedef enum {
     HV_CMD_SET_PENDING,    /**< Record cmd.on (+ optionally cmd.percent as the last level); no hardware change. */
     HV_CMD_EMERGENCY_OFF,  /**< Force PWMD to 0 now, latch it; leave s_desired_on untouched. */
     HV_CMD_APPLY_DIMMING,  /**< Adopt cmd.dim: reconfigure LEDC, re-render the current level. */
+    HV_CMD_SET_SCALE,      /**< Set the global LD-reference cap (cmd.percent), re-render. */
 } hv9910_cmd_type_t;
 
 /** @brief One queued command for hv9910_task. */
@@ -138,6 +140,17 @@ static uint32_t pick_duty_res_bits(uint32_t freq_hz)
 static uint32_t scale_duty(uint32_t q, uint32_t full)
 {
     return (uint32_t)(((uint64_t)q * full + (HV9910_Q_ONE >> 1)) >> HV9910_Q_BITS);
+}
+
+/**
+ * @brief Multiplies two Q16 fractions (round-to-nearest).
+ * @param a First fraction, 0..HV9910_Q_ONE.
+ * @param b Second fraction, 0..HV9910_Q_ONE.
+ * @return a*b in Q16.
+ */
+static uint32_t mul_q(uint32_t a, uint32_t b)
+{
+    return (uint32_t)(((uint64_t)a * b + (HV9910_Q_ONE >> 1)) >> HV9910_Q_BITS);
 }
 
 /**
@@ -222,7 +235,12 @@ static void apply_level(uint32_t level_q)
     hv9910_curve_out_t o = hv9910_curve_eval(s_dimming.mode, level_q, s_crossover_q, s_min_on_frac_q);
     bool lit = o.want_lit && !s_power_cut;
 
-    uint32_t ld_duty   = lit ? scale_duty(o.ld_duty_q,   s_ld_full)   : 0;
+    /* s_output_scale_q caps the LD (peak-current) reference only -- PWMD keeps
+     * its full range so dimming depth is unchanged. In PWM mode o.ld_duty_q is
+     * Q_ONE, so the scale becomes a straight peak-current cap; in ANALOG/HYBRID
+     * it scales the reference directly (both HYBRID curve branches by the same
+     * factor, so the knee stays continuous). */
+    uint32_t ld_duty   = lit ? scale_duty(mul_q(o.ld_duty_q, s_output_scale_q), s_ld_full) : 0;
     uint32_t pwmd_duty = lit ? scale_duty(o.pwmd_duty_q, s_pwmd_full) : 0;
 
     s_level_q = level_q;
@@ -315,6 +333,24 @@ static void hv_do_apply_dimming(const hv9910_dimming_t *p)
 }
 
 /**
+ * @brief Sets the global LD-reference cap and re-renders the current level.
+ * @param percent LD scale, 1-100.
+ * @return None.
+ */
+static void hv_do_set_scale(uint8_t percent)
+{
+    if (percent < 1) {
+        percent = 1;
+    }
+    if (percent > 100) {
+        percent = 100;
+    }
+    s_output_scale_q = ((uint32_t)percent * HV9910_Q_ONE) / 100u;
+    apply_level(s_level_q);
+    ESP_LOGI(TAG, "Output scale: LD reference capped to %u%%", (unsigned)percent);
+}
+
+/**
  * @brief Advances the in-progress IDENTIFY sequence by one step, or ends it.
  * @return None.
  */
@@ -397,6 +433,9 @@ static void dispatch_cmd(const hv9910_cmd_t *cmd)
         break;
     case HV_CMD_APPLY_DIMMING:
         hv_do_apply_dimming(&cmd->dim);
+        break;
+    case HV_CMD_SET_SCALE:
+        hv_do_set_scale(cmd->percent);
         break;
     }
 }
@@ -493,6 +532,7 @@ void hv9910_init(const hv9910_config_t *config)
     s_desired_on = false;
     s_power_cut = false;
     s_ledc_started = false;
+    s_output_scale_q = HV9910_Q_ONE;
 
     /* Both pins driven low before the LEDC takes them over: PWMD low =
      * driver disabled, so the LED is unambiguously off at boot. */
@@ -535,6 +575,17 @@ void hv9910_set_dimming(const hv9910_dimming_t *p)
     }
     hv9910_cmd_t cmd = { .type = HV_CMD_APPLY_DIMMING, .dim = *p };
     post_cmd(&cmd, false);
+}
+
+void hv9910_set_output_scale(uint8_t percent)
+{
+    hv9910_cmd_t cmd = { .type = HV_CMD_SET_SCALE, .percent = percent };
+    post_cmd(&cmd, false);
+}
+
+uint8_t hv9910_get_output_scale_pct(void)
+{
+    return (uint8_t)((s_output_scale_q * 100u + (HV9910_Q_ONE / 2)) / HV9910_Q_ONE);
 }
 
 void hv9910_enable_at(uint8_t percent)
@@ -580,11 +631,6 @@ void hv9910_set_pending(bool on, uint8_t remember_pct)
 {
     hv9910_cmd_t cmd = { .type = HV_CMD_SET_PENDING, .on = on, .percent = remember_pct };
     post_cmd(&cmd, false);
-}
-
-bool hv9910_is_ramp_pending(void)
-{
-    return s_pending != PENDING_NONE;
 }
 
 uint8_t hv9910_get_dim_percent(void)

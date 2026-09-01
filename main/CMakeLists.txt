@@ -5,11 +5,11 @@ idf_component_register(SRCS
                             hv9910
                             driver_config
                             tps2378
+                            power_manager
                             voltage_sense
                             eth_init
                             devid
                             admin_channel
                             dmx_input
                             status_leds
-                            esp_timer
                             app_update)

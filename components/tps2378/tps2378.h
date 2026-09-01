@@ -27,7 +27,10 @@ typedef struct {
     int vbus_hysteresis_mv;  /**< VBUS hysteresis margin. */
     void (*on_power_ready)(tps2378_source_t source, void *ctx); /**< Power-ready notification. */
     void (*on_power_lost)(void *ctx);                            /**< Power-lost notification. */
-    void *callback_ctx;      /**< Context passed to both notifications. */
+    void (*on_source_changed)(tps2378_source_t source, void *ctx); /**< Fired whenever the debounced
+                                 source class changes, including while power stays ready (e.g. a live
+                                 Type-1 -> Type-2 renegotiation). May be NULL. */
+    void *callback_ctx;      /**< Context passed to all notifications. */
 } tps2378_config_t;
 
 /**

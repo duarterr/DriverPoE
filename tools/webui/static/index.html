@@ -284,12 +284,23 @@
 
 <dialog id="dimmingDialog">
   <form method="dialog" onsubmit="return false">
-    <h2 style="margin:0 0 4px;font-size:16px;" id="dimmingDialogTitle">Dimming settings</h2>
+    <h2 style="margin:0 0 4px;font-size:16px;" id="dimmingDialogTitle">Device settings</h2>
     <div class="sub" style="color:var(--muted);font-size:12px;margin-bottom:10px;">
-      Dimming strategy. The device clamps out-of-range values. Every level change is
-      applied at once. Fades come from the DMX layer / console.
+      The device clamps out-of-range values. Every level change is applied at once.
     </div>
     <div class="dmx-form">
+      <h4>Power</h4>
+      <label class="full">Power mode
+        <select id="drv-power_mode">
+          <option value="0">Auto (PoE+ when available, else PoE cap)</option>
+          <option value="1">PoE only (always cap to the PoE budget)</option>
+          <option value="2">PoE+ required (blink if only PoE)</option>
+        </select>
+      </label>
+      <label>PoE cap (% of output, 10-100)<input type="number" id="drv-poe_cap_pct" min="10" max="100"></label>
+      <div class="hint">Applied to the LD current reference on Type-1 PoE. 51 &asymp; 12.95 W / 25.5 W.</div>
+
+      <h4>Dimming mode</h4>
       <label class="full">Dimming mode
         <select id="drv-mode">
           <option value="2">Hybrid (analog + PWM)</option>
@@ -445,6 +456,16 @@ function poeSourceLabel(src) {
   if (!m) return `<span>${src}</span>`;
   return `<span title="${m[1]}">${m[0]}</span>`;
 }
+// Effective power-manager state, appended to the Power row.
+function powerStateSuffix(d) {
+  switch (d.power_state_name) {
+    case 'full':    return ` &middot; ${pill('full power', 'on')}`;
+    case 'capped':  return ` &middot; ${pill(`capped ${d.power_effective_scale_pct}%`, 'warn')}`;
+    case 'blocked': return ` &middot; ${pill('PoE+ required', 'err')}`;
+    default:        return '';
+  }
+}
+const POWER_MODE = { 0: 'Auto', 1: 'PoE only', 2: 'PoE+ required' };
 function artnetParts(pa) {
   return `net ${(pa >> 8) & 0x7f} / sub ${(pa >> 4) & 0x0f} / uni ${pa & 0x0f}`;
 }
@@ -510,9 +531,11 @@ function dmxCfgRows(ip, d) {
 // the "Save" in the dialog is authenticated.
 const DRIVER_MODE = { 0: 'PWM', 1: 'Analog', 2: 'Hybrid' };
 
-function dimmingCfgRows(d) {
+function deviceCfgRows(d) {
+  let out = row('Power mode', pill(POWER_MODE[d.power_mode ?? 0] ?? d.power_mode, 'on'))
+          + row('PoE cap', `${d.poe_cap_pct ?? 0}% of output`);
   const mode = d.dimming_mode ?? 2;
-  let out = row('Mode', pill(DRIVER_MODE[mode] ?? mode, 'on'));
+  out += row('Dimming mode', pill(DRIVER_MODE[mode] ?? mode, 'on'));
   if (mode === 0 || mode === 2) {
     out += row('PWM path', `${d.dimming_pwm_freq_hz ?? 0} Hz · ${d.dimming_min_on_time_us ?? 0} us min on-time`);
   }
@@ -531,7 +554,7 @@ function renderDevices() {
     const power = d.poe_ready ? pill('ready', 'on') : pill(d.power_blocking_reason || 'not ready', 'warn');
     const driver = d.driver_on ? pill(`on ${d.dim_percent}%`, 'on') : pill('off', 'off');
     // "pending" only makes sense while power is actually withheld; once
-    // poe_ready is true a desired-on/driver-off gap is just a ramp settling.
+    // poe_ready is true a desired-on/driver-off gap is just the output settling.
     const desired = !d.desired_on ? pill('off', 'off')
                     : (!d.driver_on && !d.poe_ready) ? pill('on · pending', 'warn')
                     : pill('on', 'on');
@@ -552,14 +575,14 @@ function renderDevices() {
       <div class="section-label">Device status</div>
       <div class="info">
         ${row('Uptime', `${d.uptime_s}s`)}
-        ${row('Power', `${power} &middot; ${poeSourceLabel(d.poe_source)}`)}
+        ${row('Power', `${power} &middot; ${poeSourceLabel(d.poe_source)}${powerStateSuffix(d)}`)}
         ${row('Driver (actual)', driver)}
         <details class="more" data-k="${d.serial}|status" ${moreOpen.has(d.serial + '|status') ? 'open' : ''} ontoggle="onMoreToggle(this)">
           <summary>more</summary>
           ${row('Last reset reason', d.reset_reason)}
           ${row('Power gates', `${gate('CDB', d.poe_cdb_confirmed)} ${gate('T2P', d.poe_t2p_confirmed)} ${gate('VBUS', d.poe_vbus_confirmed)}`)}
+          ${row('Power budget', `${(d.power_budget_w ?? 0).toFixed(2)} W`)}
           ${row('Driver (desired)', desired)}
-          ${row('Ramp/blink in progress', d.ramp_pending ? pill('yes', 'warn') : pill('no', 'off'))}
           ${row('VBUS', `${d.vbus_mv}mV`)}
           ${row('LED voltage', `${d.led_voltage_mv}mV`)}
         </details>
@@ -614,11 +637,11 @@ function renderDevices() {
 
       <hr class="divider">
 
-      <div class="section-label">Dimming settings</div>
+      <div class="section-label">Device settings</div>
       <div class="info">
-        ${dimmingCfgRows(d)}
+        ${deviceCfgRows(d)}
       </div>
-      <div class="center-row"><button class="btn" onclick="openDimmingDialog(${i})">Dimming settings</button></div>
+      <div class="center-row"><button class="btn" onclick="openDimmingDialog(${i})">Device settings</button></div>
 
       <hr class="divider">
 
@@ -988,9 +1011,10 @@ document.getElementById('dmxDialogSave').addEventListener('click', async () => {
   }
 });
 
-// Dimming settings -- HV9910 dimming mode. The current config comes from
-// the INFO block (d.dimming_*), so the dialog prefills without a fetch;
-// only the Save is authenticated (same 401 -> prompt -> retry as DMX).
+// Device settings -- power policy + HV9910 dimming mode. The current config
+// comes from the INFO block (d.power_* / d.dimming_*), so the dialog prefills
+// without a fetch; only the Save is authenticated (same 401 -> prompt -> retry
+// as DMX).
 let dimmingDialogIndex = null;
 
 // "smallest non-zero level" = min_on_time_us * pwm_freq_hz, as a percent.
@@ -1010,13 +1034,15 @@ function openDimmingDialog(i) {
   const d = devices[i];
   dimmingDialogIndex = i;
   const set = (id, v) => { document.getElementById(id).value = v; };
+  set('drv-power_mode', d.power_mode ?? 0);
+  set('drv-poe_cap_pct', d.poe_cap_pct ?? 51);
   set('drv-mode', d.dimming_mode ?? 2);
   set('drv-pwm_freq_hz', d.dimming_pwm_freq_hz ?? 2000);
   set('drv-min_on_time_us', d.dimming_min_on_time_us ?? 20);
   set('drv-analog_freq_hz', d.dimming_analog_freq_hz ?? 60000);
   set('drv-crossover_pct', d.dimming_crossover_pct ?? 20);
   updateMinStep();
-  document.getElementById('dimmingDialogTitle').textContent = `Dimming settings - ${d.serial}`;
+  document.getElementById('dimmingDialogTitle').textContent = `Device settings - ${d.serial}`;
   document.getElementById('dimmingDialogMsg').textContent = '';
   document.getElementById('dimmingDialog').showModal();
 }
@@ -1033,6 +1059,8 @@ document.getElementById('dimmingDialogSave').addEventListener('click', async () 
     min_on_time_us: num('drv-min_on_time_us'),
     analog_freq_hz: num('drv-analog_freq_hz'),
     crossover_pct: num('drv-crossover_pct'),
+    power_mode: num('drv-power_mode'),
+    poe_cap_pct: num('drv-poe_cap_pct'),
   };
 
   let secretHex = null;
@@ -1042,8 +1070,8 @@ document.getElementById('dimmingDialogSave').addEventListener('click', async () 
     if (ok) {
       document.getElementById('dimmingDialog').close();
       await refreshOne(i);
-      if (data.applied) showMsg(i, 'Dimming config saved.', true);
-      else showMsg(i, `Dimming config refused (${data.status}).`, false);
+      if (data.applied) showMsg(i, 'Device settings saved.', true);
+      else showMsg(i, `Device settings refused (${data.status}).`, false);
       return;
     }
     if (status === 401 && data.error === 'auth_needed' && attempt === 0) {

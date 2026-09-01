@@ -7,6 +7,7 @@ idf_component_register(SRCS
                         PRIV_REQUIRES
                             hv9910
                             tps2378
+                            power_manager
                             devid
                             eth_init
                             esp_netif

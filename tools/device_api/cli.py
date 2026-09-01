@@ -74,10 +74,11 @@ def print_info(info: DeviceInfo) -> None:
     if not info.poe_ready:
         print(f"  Blocked on:          {info.power_blocking_reason}")
         print(f"  CDB/T2P/VBUS ok:     {info.poe_cdb_confirmed}/{info.poe_t2p_confirmed}/{info.poe_vbus_confirmed}")
+    print(f"Power mode:            {info.power_mode_name} (cap {info.poe_cap_pct}%)")
+    print(f"Power state:          {info.power_state_name}"
+          f" (LD scale {info.power_effective_scale_pct}%, budget {info.power_budget_w:g} W)")
     print(f"Driver on (actual):   {info.driver_on} (dim={info.dim_percent}%)")
     print(f"Driver on (desired):  {info.desired_on}{'  <- pending, will apply once power is confirmed' if info.desired_on and not info.driver_on else ''}")
-    if info.ramp_pending:
-        print("Ramp/blink in progress.")
     print(f"VBUS:                 {info.vbus_mv}mV")
     print(f"LED voltage:          {info.led_voltage_mv}mV")
     print(f"DMX layer:            {'enabled' if info.dmx_layer_enabled else 'disabled'}"
