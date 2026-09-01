@@ -434,6 +434,17 @@ function dmxSourcePill(src) {
   if (src === 'both') return pill('art-net + sacn', 'on');
   return pill('none', 'off');
 }
+// Friendly label for the INFO poe_source byte (protocol: none/type1/type2/aux).
+function poeSourceLabel(src) {
+  const m = {
+    type1: ['PoE',  '802.3af, 12.95 W'],
+    type2: ['PoE+', '802.3at, 25.5 W'],
+    aux:   ['AUX',  'bench supply, not PoE'],
+    none:  ['none', 'no source confirmed'],
+  }[src];
+  if (!m) return `<span>${src}</span>`;
+  return `<span title="${m[1]}">${m[0]}</span>`;
+}
 function artnetParts(pa) {
   return `net ${(pa >> 8) & 0x7f} / sub ${(pa >> 4) & 0x0f} / uni ${pa & 0x0f}`;
 }
@@ -541,7 +552,7 @@ function renderDevices() {
       <div class="section-label">Device status</div>
       <div class="info">
         ${row('Uptime', `${d.uptime_s}s`)}
-        ${row('Power', `${power} &middot; source: ${d.poe_source}`)}
+        ${row('Power', `${power} &middot; ${poeSourceLabel(d.poe_source)}`)}
         ${row('Driver (actual)', driver)}
         <details class="more" data-k="${d.serial}|status" ${moreOpen.has(d.serial + '|status') ? 'open' : ''} ontoggle="onMoreToggle(this)">
           <summary>more</summary>
