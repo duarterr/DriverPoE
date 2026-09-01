@@ -297,15 +297,15 @@
           <option value="2">PoE+ required (blink if only PoE)</option>
         </select>
       </label>
-      <label>PoE cap (% of output, 10-100)<input type="number" id="drv-poe_cap_pct" min="10" max="100"></label>
+      <label>PoE cap (% of max power, 10-100)<input type="number" id="drv-poe_cap_pct" min="10" max="100"></label>
       <div class="hint">Applied to the LD current reference on Type-1 PoE. 51 &asymp; 12.95 W / 25.5 W.</div>
 
       <h4>Dimming mode</h4>
       <label class="full">Dimming mode
         <select id="drv-mode">
           <option value="2">Hybrid (analog + PWM)</option>
-          <option value="1">Analog (LD only)</option>
-          <option value="0">PWM (PWMD only)</option>
+          <option value="1">Analog (LD only) - Less flicker</option>
+          <option value="0">PWM (PWMD only) - Less chromatic shift</option>
         </select>
       </label>
 
@@ -536,7 +536,7 @@ const DRIVER_MODE = { 0: 'PWM', 1: 'Analog', 2: 'Hybrid' };
 
 function deviceCfgRows(d) {
   let out = row('Power mode', pill(POWER_MODE[d.power_mode ?? 0] ?? d.power_mode, 'on'))
-          + row('PoE cap', `${d.poe_cap_pct ?? 0}% of output`);
+          + row('PoE cap', `${d.poe_cap_pct ?? 0}% of max power`);
   const mode = d.dimming_mode ?? 2;
   out += row('Dimming mode', pill(DRIVER_MODE[mode] ?? mode, 'on'));
   if (mode === 0 || mode === 2) {
