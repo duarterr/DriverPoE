@@ -28,7 +28,6 @@ class DeviceInfo:
     driver_on: bool
     desired_on: bool
     dim_percent: int
-    ramp_pending: bool
     vbus_mv: int
     led_voltage_mv: int
     # DMX layer status (from the INFO response's trailing status block).
@@ -48,6 +47,14 @@ class DeviceInfo:
     dimming_analog_freq_hz: int
     dimming_min_on_time_us: int
     dimming_crossover_pct: int
+    # Power policy + live state (from the INFO response's trailing power block).
+    power_mode: int                  # 0 = auto, 1 = poe_only, 2 = poe_plus_required
+    power_mode_name: str
+    poe_cap_pct: int                 # LD-reference scale under the Type-1 cap
+    power_state: int                 # 0 = no_power, 1 = full, 2 = capped, 3 = blocked
+    power_state_name: str
+    power_effective_scale_pct: int   # LD scale currently applied (100 or the cap)
+    power_budget_w: float            # negotiated PoE budget: 0 / 12.95 / 25.5
 
     @property
     def mac_str(self) -> str:

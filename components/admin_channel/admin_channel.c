@@ -17,6 +17,7 @@
 #include "voltage_sense.h"
 #include "dmx_input.h"
 #include "driver_config.h"
+#include "power_manager.h"
 
 #include <string.h>
 #include <inttypes.h>
@@ -403,7 +404,7 @@ static void handle_info(int sock, const parsed_header_t *hdr, const struct socka
 
     vTaskDelay(pdMS_TO_TICKS(esp_random() % 50));
 
-    uint8_t payload[72];
+    uint8_t payload[84];
     size_t off = 0;
 
     memcpy(payload + off, devid_get_mac(), DEVID_MAC_LEN); off += DEVID_MAC_LEN;
@@ -430,15 +431,14 @@ static void handle_info(int sock, const parsed_header_t *hdr, const struct socka
     payload[off++] = hv9910_is_enabled() ? 1 : 0;
     payload[off++] = hv9910_pending_on() ? 1 : 0;
     payload[off++] = hv9910_get_dim_percent();
-    payload[off++] = hv9910_is_ramp_pending() ? 1 : 0;
     put_u32_be(payload + off, (uint32_t)tps2378_get_vbus_mv()); off += 4;
 
     voltage_reading_t v = {0};
     voltage_sense_read(&v);
     put_u32_be(payload + off, (uint32_t)v.led_voltage_mv); off += 4;
 
-    /* --- DMX layer status block: 16 bytes appended after the original 48
-     * (payload = 64). Carries everything the unauthenticated demo UI needs
+    /* --- DMX layer status block: 16 bytes appended after the 47-byte core
+     * (payload = 63). Carries everything the unauthenticated demo UI needs
      * to build Art-Net frames without ever reading DMX_GET_CONFIG. --- */
     dmx_input_status_t dmx = {0};
     dmx_input_get_status(&dmx);
@@ -454,7 +454,7 @@ static void handle_info(int sock, const parsed_header_t *hdr, const struct socka
     payload[off++] = dmx.proto_mask;
 
     /* --- Dimming-mode block: 8 bytes appended after the DMX block
-     * (payload = 72). Lets tools/webui show the current mode/params without
+     * (payload = 71). Lets tools/webui show the current mode/params without
      * an authenticated DRIVER_GET_CONFIG. analog_freq_hz is sent in units
      * of 10 Hz so it fits a u16. --- */
     driver_config_t drv = {0};
@@ -464,6 +464,18 @@ static void handle_info(int sock, const parsed_header_t *hdr, const struct socka
     put_u16_be(payload + off, (uint16_t)(drv.analog_freq_hz / 10)); off += 2;
     put_u16_be(payload + off, drv.min_on_time_us); off += 2;
     payload[off++] = drv.crossover_pct;
+
+    /* --- Power block: 13 bytes appended after the dimming block (payload =
+     * 84). power_mode + poe_cap_pct mirror the driver-config fields;
+     * power_state / effective_scale_pct / budget_cw are the live result of
+     * the policy engine. The 7 trailing reserved bytes give room for future
+     * power fields without another coordinated INFO size bump. --- */
+    payload[off++] = drv.power_mode;
+    payload[off++] = drv.poe_cap_pct;
+    payload[off++] = (uint8_t)power_manager_get_state();
+    payload[off++] = power_manager_effective_scale_pct();
+    put_u16_be(payload + off, power_manager_budget_cw()); off += 2;
+    memset(payload + off, 0, 7); off += 7;   /* reserved */
 
     send_packet(sock, src, ADMIN_TYPE_INFO_RESP, NULL, payload, (uint16_t)off, NULL);
 }
@@ -508,7 +520,10 @@ static void handle_on(int sock, const parsed_header_t *hdr,
         return;
     }
 
-    if (!tps2378_is_ready()) {
+    if (!tps2378_is_ready() || !power_manager_output_allowed()) {
+        /* Power unconfirmed, or the power policy is holding the LED off
+         * (PoE+ required on Type-1): record the desire so power_manager
+         * lights it once the policy is satisfied. */
         hv9910_set_pending(true, 0);
         send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_ON_RESP, ADMIN_STATUS_ACCEPTED_PENDING, devid_get_admin_secret());
         return;
@@ -567,8 +582,8 @@ static void handle_dim(int sock, const parsed_header_t *hdr,
         return;
     }
 
-    if (!tps2378_is_ready()) {
-        hv9910_set_pending(true, percent);   // remembers the level; the driver comes up once power is confirmed
+    if (!tps2378_is_ready() || !power_manager_output_allowed()) {
+        hv9910_set_pending(true, percent);   // remembers the level; the driver comes up once power/policy allows
         send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DIM_RESP, ADMIN_STATUS_ACCEPTED_PENDING, devid_get_admin_secret());
         return;
     }
@@ -587,7 +602,7 @@ static void handle_dim(int sock, const parsed_header_t *hdr,
  */
 static void handle_identify(int sock, const parsed_header_t *hdr, const struct sockaddr_in *src)
 {
-    if (!tps2378_is_ready()) {
+    if (!tps2378_is_ready() || !power_manager_output_allowed()) {
         send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_IDENTIFY_RESP, ADMIN_STATUS_ERR_NOT_READY, devid_get_admin_secret());
         return;
     }
@@ -998,6 +1013,9 @@ static void handle_driver_set_config(int sock, const parsed_header_t *hdr,
         send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DRIVER_SET_CONFIG_RESP, ADMIN_STATUS_ERR_INTERNAL, devid_get_admin_secret());
         return;
     }
+    /* power_mode / poe_cap_pct may have changed -- re-run the policy now so a
+     * live PoE+-required toggle or cap change takes effect without a reboot. */
+    power_manager_reeval();
     send_status_resp(sock, src, hdr->nonce, ADMIN_TYPE_DRIVER_SET_CONFIG_RESP, ADMIN_STATUS_OK, devid_get_admin_secret());
 }
 

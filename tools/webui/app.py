@@ -59,6 +59,8 @@ from device_api.protocol import (
     DEFAULT_RAMP_MS,
     DEFAULT_TIMEOUT,
     DRIVER_MODE_NAMES,
+    POWER_MODE_NAMES,
+    POWER_STATE_NAMES,
     SECRET_LEN,
     DmxConfig,
     DriverConfig,
@@ -111,7 +113,6 @@ def _device_to_dict(info: DeviceInfo) -> dict[str, Any]:
         "driver_on": info.driver_on,
         "desired_on": info.desired_on,
         "dim_percent": info.dim_percent,
-        "ramp_pending": info.ramp_pending,
         "vbus_mv": info.vbus_mv,
         "led_voltage_mv": info.led_voltage_mv,
         "dmx_layer_enabled": info.dmx_layer_enabled,
@@ -130,6 +131,13 @@ def _device_to_dict(info: DeviceInfo) -> dict[str, Any]:
         "dimming_analog_freq_hz": info.dimming_analog_freq_hz,
         "dimming_min_on_time_us": info.dimming_min_on_time_us,
         "dimming_crossover_pct": info.dimming_crossover_pct,
+        "power_mode": info.power_mode,
+        "power_mode_name": info.power_mode_name,
+        "poe_cap_pct": info.poe_cap_pct,
+        "power_state": info.power_state,
+        "power_state_name": info.power_state_name,
+        "power_effective_scale_pct": info.power_effective_scale_pct,
+        "power_budget_w": info.power_budget_w,
     }
 
 
@@ -161,6 +169,9 @@ def _driver_to_dict(cfg: DriverConfig) -> dict[str, Any]:
         "analog_freq_hz": cfg.analog_freq_hz,
         "min_on_time_us": cfg.min_on_time_us,
         "crossover_pct": cfg.crossover_pct,
+        "power_mode": cfg.power_mode,
+        "power_mode_name": POWER_MODE_NAMES.get(cfg.power_mode, str(cfg.power_mode)),
+        "poe_cap_pct": cfg.poe_cap_pct,
     }
 
 
@@ -282,6 +293,8 @@ class DriverConfigRequest(BaseModel):
     analog_freq_hz: int = 60000
     min_on_time_us: int = 20
     crossover_pct: int = 20
+    power_mode: int = 0          # 0 auto, 1 poe_only, 2 poe_plus_required
+    poe_cap_pct: int = 51
     secret_hex: str | None = None
 
 
@@ -581,6 +594,8 @@ def api_driver_set(ip: str, body: DriverConfigRequest, port: int = DEFAULT_PORT)
         analog_freq_hz=body.analog_freq_hz,
         min_on_time_us=body.min_on_time_us,
         crossover_pct=body.crossover_pct,
+        power_mode=body.power_mode,
+        poe_cap_pct=body.poe_cap_pct,
     )
     try:
         with AdminClient(ip, port, DEFAULT_TIMEOUT) as client:

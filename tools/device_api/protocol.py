@@ -51,7 +51,7 @@ OTA_SHA256_LEN = 32
 
 ZERO_NONCE = b"\x00" * NONCE_LEN
 
-INFO_RESP_PAYLOAD_SIZE = 72       # 48 core + 16 DMX status + 8 dimming-mode
+INFO_RESP_PAYLOAD_SIZE = 84       # 47 core + 16 DMX status + 8 dimming-mode + 13 power
 
 # DMX layer config wire format -- must match DMX_CFG_WIRE_SIZE /
 # dmx_config_pack() in components/dmx_input/include/dmx_input.h. 18 bytes:
@@ -67,14 +67,21 @@ DMX_MERGE_NAMES = {0: "HTP", 1: "LTP"}
 DMX_LOSS_NAMES = {0: "hold", 1: "to-black", 2: "to-level"}
 DMX_SOURCE_NAMES = {0: "none", 1: "artnet", 2: "sacn", 3: "both"}
 
-# HV9910 dimming config wire format -- must match DRV_CFG_WIRE_SIZE /
+# HV9910 dimming + power config wire format -- must match DRV_CFG_WIRE_SIZE /
 # driver_config_pack() in components/driver_config/include/driver_config.h.
-# 11 bytes: [0]=layout [1]=mode [2:4]=pwm_freq_hz(u16) [4:8]=analog_freq_hz(u32)
-# [8:10]=min_on_time_us(u16) [10]=crossover_pct, multi-byte fields big-endian.
-DRV_CFG_WIRE_SIZE = 11
-DRV_CFG_LAYOUT_VERSION = 1
+# v2, 13 bytes: [0]=layout [1]=mode [2:4]=pwm_freq_hz(u16) [4:8]=analog_freq_hz(u32)
+# [8:10]=min_on_time_us(u16) [10]=crossover_pct [11]=power_mode [12]=poe_cap_pct,
+# multi-byte fields big-endian. The v1 11-byte layout (no power fields) is still
+# accepted on read.
+DRV_CFG_WIRE_SIZE = 13
+DRV_CFG_WIRE_SIZE_V1 = 11
+DRV_CFG_LAYOUT_VERSION = 2
 
 DRIVER_MODE_NAMES = {0: "pwm", 1: "analog", 2: "hybrid"}
+
+# driver_config.power_mode / power_manager state (see components/power_manager/).
+POWER_MODE_NAMES = {0: "auto", 1: "poe_only", 2: "poe_plus_required"}
+POWER_STATE_NAMES = {0: "no_power", 1: "full", 2: "capped", 3: "blocked"}
 
 
 class PacketType(IntEnum):
@@ -247,8 +254,8 @@ def status_byte(payload: bytes) -> int:
 
 # ======================================================================= #
 # INFO_RESP payload -- must match handle_info() in
-# components/admin_channel/admin_channel.c exactly (48 bytes, v3, no
-# Matter fields).
+# components/admin_channel/admin_channel.c exactly. 84 bytes:
+# 47 core + 16 DMX status + 8 dimming-mode + 13 power (last 7 reserved).
 # ======================================================================= #
 _POE_SOURCE_NAMES = {0: "none", 1: "type1", 2: "type2", 3: "aux"}
 _RESET_REASON_NAMES = {
@@ -278,9 +285,8 @@ def parse_info_payload(payload: bytes) -> dict:
     driver_on = bool(payload[36])
     desired_on = bool(payload[37])
     dim_percent = payload[38]
-    ramp_pending = bool(payload[39])
-    vbus_mv = struct.unpack(">I", payload[40:44])[0]
-    led_voltage_mv = struct.unpack(">i", payload[44:48])[0]
+    vbus_mv = struct.unpack(">I", payload[39:43])[0]
+    led_voltage_mv = struct.unpack(">i", payload[43:47])[0]
     out = {
         "mac": mac,
         "fw_version": fw_version,
@@ -295,13 +301,12 @@ def parse_info_payload(payload: bytes) -> dict:
         "driver_on": driver_on,
         "desired_on": desired_on,
         "dim_percent": dim_percent,
-        "ramp_pending": ramp_pending,
         "vbus_mv": vbus_mv,
         "led_voltage_mv": led_voltage_mv,
     }
 
-    # DMX layer status block (payload[48:64]).
-    b = payload[48:64]
+    # DMX layer status block (payload[47:63]).
+    b = payload[47:63]
     out.update({
         "dmx_layer_enabled": bool(b[0]),
         "dmx_active_source": DMX_SOURCE_NAMES.get(b[1], str(b[1])),
@@ -315,14 +320,28 @@ def parse_info_payload(payload: bytes) -> dict:
         "dmx_proto_mask": b[15],
     })
 
-    # Dimming-mode block (payload[64:72]); analog_freq_hz is in units of 10 Hz.
-    d = payload[64:72]
+    # Dimming-mode block (payload[63:71]); analog_freq_hz is in units of 10 Hz.
+    d = payload[63:71]
     out.update({
         "dimming_mode": d[0],
         "dimming_pwm_freq_hz": struct.unpack(">H", d[1:3])[0],
         "dimming_analog_freq_hz": struct.unpack(">H", d[3:5])[0] * 10,
         "dimming_min_on_time_us": struct.unpack(">H", d[5:7])[0],
         "dimming_crossover_pct": d[7],
+    })
+
+    # Power block (payload[71:84]): policy + live state. The 7 trailing bytes
+    # are reserved (zero) for future fields.
+    p = payload[71:84]
+    budget_dw = struct.unpack(">H", p[4:6])[0]
+    out.update({
+        "power_mode": p[0],
+        "power_mode_name": POWER_MODE_NAMES.get(p[0], str(p[0])),
+        "poe_cap_pct": p[1],
+        "power_state": p[2],
+        "power_state_name": POWER_STATE_NAMES.get(p[2], str(p[2])),
+        "power_effective_scale_pct": p[3],
+        "power_budget_w": budget_dw / 100.0,
     })
     return out
 
@@ -421,25 +440,38 @@ class DriverConfig:
     analog_freq_hz: int = 60000  # LD (RC-fed) PWM frequency, 40000..80000
     min_on_time_us: int = 20     # PWMD minimum conduction burst, 2..200
     crossover_pct: int = 20      # hybrid knee, 10..60
+    power_mode: int = 0          # 0 = auto, 1 = poe_only, 2 = poe_plus_required
+    poe_cap_pct: int = 51        # LD-reference scale under the Type-1 cap, 10..100
 
 
 def pack_driver_config(cfg: DriverConfig) -> bytes:
     return struct.pack(
-        ">BBHIHB",
+        ">BBHIHBBB",
         DRV_CFG_LAYOUT_VERSION,
         cfg.mode & 0xFF,
         cfg.pwm_freq_hz & 0xFFFF,
         cfg.analog_freq_hz & 0xFFFFFFFF,
         cfg.min_on_time_us & 0xFFFF,
         cfg.crossover_pct & 0xFF,
+        cfg.power_mode & 0xFF,
+        cfg.poe_cap_pct & 0xFF,
     )
 
 
 def parse_driver_config(payload: bytes) -> DriverConfig:
+    """Parses a v2 (13-byte) blob, or a legacy v1 (11-byte, no power fields)
+    blob -- the firmware still accepts and forward-migrates v1."""
+    if len(payload) == DRV_CFG_WIRE_SIZE_V1 and payload[0] == 1:
+        _, mode, pwm_hz, analog_hz, min_on_us, xover = struct.unpack(">BBHIHB", payload)
+        return DriverConfig(
+            mode=mode, pwm_freq_hz=pwm_hz, analog_freq_hz=analog_hz,
+            min_on_time_us=min_on_us, crossover_pct=xover,
+        )
     if len(payload) != DRV_CFG_WIRE_SIZE:
         raise ProtocolError(
             f"unexpected driver config size: {len(payload)} (expected {DRV_CFG_WIRE_SIZE})")
-    version, mode, pwm_hz, analog_hz, min_on_us, xover = struct.unpack(">BBHIHB", payload)
+    (version, mode, pwm_hz, analog_hz, min_on_us, xover,
+     power_mode, poe_cap_pct) = struct.unpack(">BBHIHBBB", payload)
     if version != DRV_CFG_LAYOUT_VERSION:
         raise ProtocolError(f"unsupported driver config layout version {version}")
     return DriverConfig(
@@ -448,4 +480,6 @@ def parse_driver_config(payload: bytes) -> DriverConfig:
         analog_freq_hz=analog_hz,
         min_on_time_us=min_on_us,
         crossover_pct=xover,
+        power_mode=power_mode,
+        poe_cap_pct=poe_cap_pct,
     )

@@ -9,6 +9,7 @@ idf_component_register(SRCS
                             voltage_sense
                             dmx_input
                             driver_config
+                            power_manager
                             esp_netif
                             esp_timer
                             esp_hw_support

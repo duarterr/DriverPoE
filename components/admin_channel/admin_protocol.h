@@ -23,7 +23,13 @@ extern "C" {
 
 /** @brief Admin packet types. */
 typedef enum {
-    ADMIN_TYPE_INFO = 0x01,           ADMIN_TYPE_INFO_RESP = 0x81,           /**< Unauthenticated. */
+    /** Unauthenticated. Response payload is a fixed 84-byte struct built by
+     * handle_info() in admin_channel.c (mirrored by parse_info_payload() in
+     * tools/device_api/protocol.py): device/PoE/driver/DMX/dimming status
+     * plus a power block (power_mode, poe_cap_pct, power_state,
+     * effective_scale_pct, budget_dw, 7 reserved bytes). Future fields
+     * consume the reserved bytes in place -- no length change. */
+    ADMIN_TYPE_INFO = 0x01,           ADMIN_TYPE_INFO_RESP = 0x81,
     ADMIN_TYPE_CHALLENGE = 0x02,      ADMIN_TYPE_CHALLENGE_RESP = 0x82,      /**< HMAC; issues a nonce. */
     ADMIN_TYPE_ON = 0x03,             ADMIN_TYPE_ON_RESP = 0x83,             /**< HMAC + nonce. */
     ADMIN_TYPE_OFF = 0x04,            ADMIN_TYPE_OFF_RESP = 0x84,            /**< HMAC + nonce. */
@@ -54,13 +60,14 @@ typedef enum {
     /** Writes the DMX layer config. Request payload = DMX_CFG_WIRE_SIZE
      * bytes; response payload = status(1). HMAC + nonce. */
     ADMIN_TYPE_DMX_SET_CONFIG = 0x0F, ADMIN_TYPE_DMX_SET_CONFIG_RESP = 0x8F,
-    /** Reads the HV9910 dimming-mode config. Response payload =
+    /** Reads the HV9910 dimming + power config. Response payload =
      * DRV_CFG_WIRE_SIZE bytes (see components/driver_config/include/driver_config.h).
      * HMAC + nonce. */
     ADMIN_TYPE_DRIVER_GET_CONFIG = 0x10, ADMIN_TYPE_DRIVER_GET_CONFIG_RESP = 0x90,
-    /** Writes the dimming-mode config. Request payload = DRV_CFG_WIRE_SIZE
+    /** Writes the dimming + power config. Request payload = DRV_CFG_WIRE_SIZE
      * bytes; response payload = status(1). HMAC + nonce. */
     ADMIN_TYPE_DRIVER_SET_CONFIG = 0x11, ADMIN_TYPE_DRIVER_SET_CONFIG_RESP = 0x91,
+    /* 0x12/0x92 .. 0x1F/0x9F reserved for future power-manager commands. */
     ADMIN_TYPE_ERR_RESP = 0xFF,
 } admin_pkt_type_t;
 

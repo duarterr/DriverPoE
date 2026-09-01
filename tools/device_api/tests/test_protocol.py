@@ -8,10 +8,12 @@ import unittest
 
 from device_api.protocol import (
     DMX_CFG_WIRE_SIZE,
+    DRV_CFG_WIRE_SIZE,
     HEADER_SIZE,
     HMAC_LEN,
     AdminStatus,
     DmxConfig,
+    DriverConfig,
     Packet,
     PacketType,
     ProtocolError,
@@ -20,7 +22,9 @@ from device_api.protocol import (
     mac_from_str,
     mac_to_str,
     pack_dmx_config,
+    pack_driver_config,
     parse_dmx_config,
+    parse_driver_config,
     parse_info_payload,
     serial_from_mac,
     status_byte,
@@ -192,7 +196,6 @@ class TestInfoPayload(unittest.TestCase):
             driver_on=1,
             desired_on=1,
             dim_percent=80,
-            ramp_pending=0,
             vbus_mv=48000,
             led_voltage_mv=3300,
             # DMX status block
@@ -212,6 +215,12 @@ class TestInfoPayload(unittest.TestCase):
             dimming_analog_freq_hz=60000,   # sent /10 on the wire
             dimming_min_on_time_us=20,
             dimming_crossover_pct=20,
+            # power block
+            power_mode=1,
+            poe_cap_pct=51,
+            power_state=2,
+            power_effective_scale_pct=51,
+            power_budget_cw=1295,
         )
         fields.update(overrides)
         buf = bytearray()
@@ -228,7 +237,6 @@ class TestInfoPayload(unittest.TestCase):
         buf.append(fields["driver_on"])
         buf.append(fields["desired_on"])
         buf.append(fields["dim_percent"])
-        buf.append(fields["ramp_pending"])
         buf += struct.pack(">I", fields["vbus_mv"])
         buf += struct.pack(">i", fields["led_voltage_mv"])
         buf.append(fields["dmx_layer_enabled"])
@@ -246,11 +254,17 @@ class TestInfoPayload(unittest.TestCase):
         buf += struct.pack(">H", fields["dimming_analog_freq_hz"] // 10)
         buf += struct.pack(">H", fields["dimming_min_on_time_us"])
         buf.append(fields["dimming_crossover_pct"])
+        buf.append(fields["power_mode"])
+        buf.append(fields["poe_cap_pct"])
+        buf.append(fields["power_state"])
+        buf.append(fields["power_effective_scale_pct"])
+        buf += struct.pack(">H", fields["power_budget_cw"])
+        buf += b"\x00" * 7   # reserved
         return bytes(buf)
 
     def test_parses_all_fields(self):
         payload = self._build_payload()
-        self.assertEqual(len(payload), 72)
+        self.assertEqual(len(payload), 84)
         parsed = parse_info_payload(payload)
         self.assertEqual(parsed["mac"], bytes.fromhex("A4CF12B93D08"))
         self.assertEqual(parsed["fw_version"], "1.2.3")
@@ -279,12 +293,19 @@ class TestInfoPayload(unittest.TestCase):
         self.assertEqual(parsed["dimming_analog_freq_hz"], 60000)
         self.assertEqual(parsed["dimming_min_on_time_us"], 20)
         self.assertEqual(parsed["dimming_crossover_pct"], 20)
+        self.assertEqual(parsed["power_mode"], 1)
+        self.assertEqual(parsed["power_mode_name"], "poe_only")
+        self.assertEqual(parsed["poe_cap_pct"], 51)
+        self.assertEqual(parsed["power_state"], 2)
+        self.assertEqual(parsed["power_state_name"], "capped")
+        self.assertEqual(parsed["power_effective_scale_pct"], 51)
+        self.assertEqual(parsed["power_budget_w"], 12.95)
 
     def test_wrong_size_rejected(self):
         with self.assertRaises(ProtocolError):
             parse_info_payload(b"\x00" * 10)
         with self.assertRaises(ProtocolError):
-            parse_info_payload(b"\x00" * 64)   # the pre-dimming-block layout is no longer accepted
+            parse_info_payload(b"\x00" * 72)   # the pre-power-block layout is no longer accepted
 
     def test_unknown_enums_fall_back_to_numeric_string(self):
         payload = self._build_payload(reset_reason=250, poe_source=99)
@@ -327,6 +348,38 @@ class TestDmxConfig(unittest.TestCase):
     def test_wrong_size_rejected(self):
         with self.assertRaises(ProtocolError):
             parse_dmx_config(b"\x01" * 10)
+
+
+class TestDriverConfig(unittest.TestCase):
+    def test_round_trip_v2(self):
+        cfg = DriverConfig(
+            mode=1, pwm_freq_hz=3000, analog_freq_hz=50000,
+            min_on_time_us=15, crossover_pct=30,
+            power_mode=2, poe_cap_pct=60,
+        )
+        blob = pack_driver_config(cfg)
+        self.assertEqual(len(blob), DRV_CFG_WIRE_SIZE)
+        self.assertEqual(blob[0], 2)  # layout version
+        self.assertEqual(parse_driver_config(blob), cfg)
+
+    def test_defaults_pack(self):
+        blob = pack_driver_config(DriverConfig())
+        self.assertEqual(parse_driver_config(blob), DriverConfig())
+        self.assertEqual(DriverConfig().power_mode, 0)
+        self.assertEqual(DriverConfig().poe_cap_pct, 51)
+
+    def test_accepts_legacy_v1_blob(self):
+        v1 = struct.pack(">BBHIHB", 1, 2, 2000, 60000, 20, 20)   # 11 bytes, no power fields
+        self.assertEqual(len(v1), 11)
+        cfg = parse_driver_config(v1)
+        self.assertEqual(cfg.mode, 2)
+        self.assertEqual(cfg.crossover_pct, 20)
+        self.assertEqual(cfg.power_mode, 0)     # defaulted
+        self.assertEqual(cfg.poe_cap_pct, 51)   # defaulted
+
+    def test_wrong_size_rejected(self):
+        with self.assertRaises(ProtocolError):
+            parse_driver_config(b"\x02" * 10)
 
 
 if __name__ == "__main__":

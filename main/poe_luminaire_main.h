@@ -32,7 +32,6 @@
 #define PIN_LED_RED                    GPIO_NUM_14    /**< Driver indicator LED. */
 #define STATUS_LED_BLUE_ACTIVE_HIGH    0               /**< Blue LED polarity. */
 #define STATUS_LED_RED_ACTIVE_HIGH     0               /**< Red LED polarity. */
-#define POWERON_SETTLE_MS              2000            /**< Power-on settle delay before auto-resuming. */
 
 #define VLED_DIVIDER_RUP_OHM           560000.0f
 #define VLED_DIVIDER_RDOWN_OHM         22200.0f         /**< Adjusted. Was 22000 */

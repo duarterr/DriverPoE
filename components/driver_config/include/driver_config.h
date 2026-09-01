@@ -21,18 +21,32 @@
 extern "C" {
 #endif
 
-/** Layout: [0]=version [1]=mode [2..4)=pwm_freq_hz(u16) [4..8)=analog_freq_hz(u32)
- *          [8..10)=min_on_time_us(u16) [10]=crossover_pct */
-#define DRV_CFG_WIRE_SIZE      11
-#define DRV_CFG_LAYOUT_VERSION 1
+/** Layout v2: [0]=version [1]=mode [2..4)=pwm_freq_hz(u16) [4..8)=analog_freq_hz(u32)
+ *             [8..10)=min_on_time_us(u16) [10]=crossover_pct
+ *             [11]=power_mode [12]=poe_cap_pct
+ * Layout v1 (11 bytes, no power fields) is still accepted on read -- see
+ * driver_config_unpack(). */
+#define DRV_CFG_WIRE_SIZE      13
+#define DRV_CFG_WIRE_SIZE_V1   11
+#define DRV_CFG_LAYOUT_VERSION 2
 
-/** @brief Persisted dimming configuration. */
+/** @brief Power policy: how the negotiated PoE class maps to LED output.
+ * "full-power-capable" = Type-2 (PoE+) or AUX bench supply. */
+typedef enum {
+    DRV_POWER_AUTO = 0,           /**< Cap on Type-1, full on Type-2/AUX. Default. */
+    DRV_POWER_POE_ONLY = 1,       /**< Always apply the Type-1 cap (AUX excepted). */
+    DRV_POWER_POE_PLUS_REQUIRED = 2, /**< Refuse to light on Type-1 (LED off, blue LED blinks). */
+} driver_power_mode_t;
+
+/** @brief Persisted dimming + power configuration. */
 typedef struct {
     uint8_t  mode;           /**< hv9910_dim_mode_t: 0 PWM, 1 ANALOG, 2 HYBRID. */
     uint16_t pwm_freq_hz;    /**< PWMD switching frequency, 1000..5000. */
     uint32_t analog_freq_hz; /**< LD (RC-fed) PWM frequency, 40000..80000. */
     uint16_t min_on_time_us; /**< PWMD minimum conduction burst, 2..200. */
     uint8_t  crossover_pct;  /**< HYBRID knee, 10..60. */
+    uint8_t  power_mode;     /**< driver_power_mode_t, 0..2. */
+    uint8_t  poe_cap_pct;    /**< LD-reference scale under the Type-1 cap, 10..100 (default 51 = 12.95/25.5). */
 } driver_config_t;
 
 /**

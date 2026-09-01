@@ -43,7 +43,7 @@ def _info_payload() -> bytes:
     buf += b"1.0.0".ljust(16, b"\x00")               # fw_version
     buf += bytes((10, 0, 0, 5))                       # ip
     buf += struct.pack(">I", 100)                     # uptime_s
-    buf += bytes([1, 1, 1, 1, 1, 1, 1, 1, 50, 0])      # reset_reason..ramp_pending
+    buf += bytes([1, 1, 1, 1, 1, 1, 1, 1, 50])        # reset_reason..dim_percent
     buf += struct.pack(">I", 48000)                    # vbus_mv
     buf += struct.pack(">i", 3300)                      # led_voltage_mv
     # DMX status block (16 B): disabled, no source, level 0, 0 fps,
@@ -52,6 +52,8 @@ def _info_payload() -> bytes:
     buf += struct.pack(">H", 1) + bytes([0, 3])
     # dimming-mode block (8 B): hybrid, 2000 Hz, 6000 (=60 kHz /10), 20 us, 20%
     buf += bytes([2]) + struct.pack(">H", 2000) + struct.pack(">H", 6000) + struct.pack(">H", 20) + bytes([20])
+    # power block (13 B): auto, cap 51%, state full, LD 100%, 25.5 W, 7 reserved
+    buf += bytes([0, 51, 1, 100]) + struct.pack(">H", 2550) + bytes(7)
     return bytes(buf)
 
 

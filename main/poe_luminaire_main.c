@@ -5,13 +5,13 @@
 
 #include "freertos/FreeRTOS.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "esp_ota_ops.h"
 
 #include "poe_luminaire_main.h"
 #include "hv9910.h"
 #include "driver_config.h"
 #include "tps2378.h"
+#include "power_manager.h"
 #include "voltage_sense.h"
 #include "eth_init.h"
 #include "devid.h"
@@ -20,75 +20,6 @@
 #include "status_leds.h"
 
 static const char *TAG = "MAIN";
-
-static bool s_first_power_ready_seen;
-static esp_timer_handle_t s_poweron_settle_timer;
-
-/**
- * @brief One-shot timer callback that resumes the driver after the power-on settle delay.
- * @param arg Power source, passed as a tps2378_source_t.
- * @return None.
- */
-static void poweron_settle_cb(void *arg)
-{
-    tps2378_source_t source = (tps2378_source_t)(intptr_t)arg;
-    if (!tps2378_is_ready()) {
-        ESP_LOGI(TAG, "Power-on settle: power dropped before delay completed");
-        return;
-    }
-
-    ESP_LOGI(TAG, "Power-on settle complete: %s", tps2378_source_name(source));
-    hv9910_enable();
-}
-
-/**
- * @brief tps2378 power-ready callback: brings the LED up only if the
- * network has asked for it on this session (a command received while
- * power wasn't ready, or an ON that was cut by a power blip). A fresh
- * boot with no command leaves the LED off -- there is no persisted state.
- * @param source Detected power source.
- * @param ctx Unused.
- * @return None.
- */
-static void on_poe_power_ready(tps2378_source_t source, void *ctx)
-{
-    (void)ctx;
-
-    if (!hv9910_pending_on()) {
-        return;
-    }
-
-    if (!s_first_power_ready_seen) {
-        s_first_power_ready_seen = true;
-        const esp_timer_create_args_t timer_args = {
-            .callback = poweron_settle_cb,
-            .arg = (void *)(intptr_t)source,
-            .name = "poweron_settle",
-        };
-        esp_err_t err = esp_timer_create(&timer_args, &s_poweron_settle_timer);
-        if (err == ESP_OK) {
-            err = esp_timer_start_once(s_poweron_settle_timer,
-                                       (uint64_t)POWERON_SETTLE_MS * 1000);
-        }
-        if (err == ESP_OK) {
-            return;
-        }
-        ESP_LOGW(TAG, "Power-on timer failed (%s)", esp_err_to_name(err));
-    }
-
-    hv9910_enable();
-}
-
-/**
- * @brief tps2378 power-lost callback: cuts the driver immediately.
- * @param ctx Unused.
- * @return None.
- */
-static void on_poe_power_lost(void *ctx)
-{
-    (void)ctx;
-    hv9910_emergency_disable();
-}
 
 /**
  * @brief Confirms the running OTA image if it's still pending verification.
@@ -135,7 +66,7 @@ void app_main(void)
         .red_pin = PIN_LED_RED,
         .blue_active_high = STATUS_LED_BLUE_ACTIVE_HIGH,
         .red_active_high = STATUS_LED_RED_ACTIVE_HIGH,
-        .power_ok_fn = tps2378_vbus_confirmed,
+        .power_ok_fn = power_manager_indicator_ok,
         .driver_on_fn = hv9910_is_enabled,
     };
     status_leds_init(&leds_cfg);
@@ -170,13 +101,17 @@ void app_main(void)
         .t2p_pin = PIN_POE_T2P,
         .vbus_min_mv = VBUS_MIN_MV,
         .vbus_hysteresis_mv = VBUS_HYSTERESIS_MV,
-        .on_power_ready = on_poe_power_ready,
-        .on_power_lost = on_poe_power_lost,
+        .on_power_ready = power_manager_tps_ready,
+        .on_power_lost = power_manager_tps_lost,
+        .on_source_changed = power_manager_tps_source_changed,
         .callback_ctx = NULL,
     };
     tps2378_init(&tps2378_cfg);
 
     tps2378_wait_ready(portMAX_DELAY);
+
+    /* Source class + configured power policy -> HV9910 LD cap / LED gate. */
+    power_manager_start();
 
     eth_init_config_t eth_cfg = {
         .mdc_pin = PIN_ETH_MDC,

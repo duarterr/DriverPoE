@@ -40,6 +40,8 @@ static void config_defaults(driver_config_t *c)
     c->analog_freq_hz = 60000;
     c->min_on_time_us = 20;
     c->crossover_pct = 20;
+    c->power_mode = DRV_POWER_AUTO;
+    c->poe_cap_pct = 51;   /* 12.95 W / 25.5 W */
 }
 
 /**
@@ -59,6 +61,9 @@ static bool config_sanitize(driver_config_t *c)
     if (c->min_on_time_us > 200) { c->min_on_time_us = 200; ok = false; }
     if (c->crossover_pct < 10) { c->crossover_pct = 10; ok = false; }
     if (c->crossover_pct > 60) { c->crossover_pct = 60; ok = false; }
+    if (c->power_mode > DRV_POWER_POE_PLUS_REQUIRED) { c->power_mode = DRV_POWER_AUTO; ok = false; }
+    if (c->poe_cap_pct < 10)  { c->poe_cap_pct = 10;  ok = false; }
+    if (c->poe_cap_pct > 100) { c->poe_cap_pct = 100; ok = false; }
     return ok;
 }
 
@@ -75,20 +80,32 @@ void driver_config_pack(const driver_config_t *c, uint8_t *o)
     o[8]  = (uint8_t)(c->min_on_time_us >> 8);
     o[9]  = (uint8_t)(c->min_on_time_us & 0xff);
     o[10] = c->crossover_pct;
+    o[11] = c->power_mode;
+    o[12] = c->poe_cap_pct;
 }
 
 bool driver_config_unpack(const uint8_t *in, size_t len, driver_config_t *c)
 {
-    if (len != DRV_CFG_WIRE_SIZE || in[0] != DRV_CFG_LAYOUT_VERSION) {
+    /* v2 is the current layout; v1 (11 bytes, no power fields) is still
+     * accepted so an OTA doesn't wipe a fixture's dimming config -- the
+     * power fields take their defaults and the blob is rewritten as v2 on
+     * the next DRIVER_SET_CONFIG. */
+    bool v1 = (len == DRV_CFG_WIRE_SIZE_V1 && in[0] == 1);
+    bool v2 = (len == DRV_CFG_WIRE_SIZE && in[0] == DRV_CFG_LAYOUT_VERSION);
+    if (!v1 && !v2) {
         return false;
     }
-    memset(c, 0, sizeof(*c));
+    config_defaults(c);
     c->mode = in[1];
     c->pwm_freq_hz = ((uint16_t)in[2] << 8) | in[3];
     c->analog_freq_hz = ((uint32_t)in[4] << 24) | ((uint32_t)in[5] << 16) |
                         ((uint32_t)in[6] << 8) | in[7];
     c->min_on_time_us = ((uint16_t)in[8] << 8) | in[9];
     c->crossover_pct = in[10];
+    if (v2) {
+        c->power_mode = in[11];
+        c->poe_cap_pct = in[12];
+    }
     return true;
 }
 
@@ -140,9 +157,11 @@ static void config_load(void)
     err = nvs_get_blob(s_nvs, NVS_KEY_CFG, buf, &len);
     if (err == ESP_OK && driver_config_unpack(buf, len, &s_cfg)) {
         config_sanitize(&s_cfg);
-        ESP_LOGI(TAG, "Driver config loaded: mode %u, pwm %uHz, analog %uHz, min_on %uus, xover %u%%",
+        ESP_LOGI(TAG, "Driver config loaded: mode %u, pwm %uHz, analog %uHz, min_on %uus, xover %u%%, "
+                      "power_mode %u, poe_cap %u%%",
                  (unsigned)s_cfg.mode, (unsigned)s_cfg.pwm_freq_hz, (unsigned)s_cfg.analog_freq_hz,
-                 (unsigned)s_cfg.min_on_time_us, (unsigned)s_cfg.crossover_pct);
+                 (unsigned)s_cfg.min_on_time_us, (unsigned)s_cfg.crossover_pct,
+                 (unsigned)s_cfg.power_mode, (unsigned)s_cfg.poe_cap_pct);
     } else {
         ESP_LOGI(TAG, "No valid driver config in NVS -- writing defaults (HYBRID)");
         config_save();
@@ -201,8 +220,10 @@ bool driver_config_set(const driver_config_t *cfg)
     xSemaphoreGive(s_lock);
 
     apply_to_hv9910();
-    ESP_LOGI(TAG, "Driver config updated: mode %u, pwm %uHz, analog %uHz, min_on %uus, xover %u%%",
+    ESP_LOGI(TAG, "Driver config updated: mode %u, pwm %uHz, analog %uHz, min_on %uus, xover %u%%, "
+                  "power_mode %u, poe_cap %u%%",
              (unsigned)next.mode, (unsigned)next.pwm_freq_hz, (unsigned)next.analog_freq_hz,
-             (unsigned)next.min_on_time_us, (unsigned)next.crossover_pct);
+             (unsigned)next.min_on_time_us, (unsigned)next.crossover_pct,
+             (unsigned)next.power_mode, (unsigned)next.poe_cap_pct);
     return true;
 }

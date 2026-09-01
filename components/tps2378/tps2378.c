@@ -134,6 +134,7 @@ static void poe_monitor_task(void *arg)
     bool prev_poe_ok = cdb_deb.confirmed;
     bool prev_aux_or_type2 = t2p_deb.confirmed;
     bool prev_vbus_ok = vbus_deb.confirmed;
+    tps2378_source_t prev_source = TPS2378_SOURCE_NONE;
 
     TickType_t last_wait_log = xTaskGetTickCount();
 
@@ -181,6 +182,14 @@ static void poe_monitor_task(void *arg)
             digital_source = TPS2378_SOURCE_AUX;
         }
         s_source = digital_source;
+
+        if (digital_source != prev_source) {
+            prev_source = digital_source;
+            ESP_LOGI(TAG, "EVENT: source class -> %s", tps2378_source_name(digital_source));
+            if (s_config.on_source_changed) {
+                s_config.on_source_changed(digital_source, s_config.callback_ctx);
+            }
+        }
 
         bool digital_source_ok = (digital_source != TPS2378_SOURCE_NONE);
         bool new_ready = digital_source_ok && vbus_ok;

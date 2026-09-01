@@ -25,7 +25,6 @@ def _info(**overrides) -> DeviceInfo:
         driver_on=True,
         desired_on=True,
         dim_percent=80,
-        ramp_pending=False,
         vbus_mv=48000,
         led_voltage_mv=3300,
         dmx_layer_enabled=False,
@@ -43,6 +42,13 @@ def _info(**overrides) -> DeviceInfo:
         dimming_analog_freq_hz=60000,
         dimming_min_on_time_us=20,
         dimming_crossover_pct=20,
+        power_mode=0,
+        power_mode_name="auto",
+        poe_cap_pct=51,
+        power_state=1,
+        power_state_name="full",
+        power_effective_scale_pct=100,
+        power_budget_w=25.5,
     )
     fields.update(overrides)
     return DeviceInfo(**fields)
