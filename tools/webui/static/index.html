@@ -448,10 +448,10 @@ function dmxSourcePill(src) {
 // Friendly label for the INFO poe_source byte (protocol: none/type1/type2/aux).
 function poeSourceLabel(src) {
   const m = {
-    type1: ['PoE',  '802.3af, 12.95 W'],
-    type2: ['PoE+', '802.3at, 25.5 W'],
-    aux:   ['AUX',  'bench supply, not PoE'],
-    none:  ['none', 'no source confirmed'],
+    type1: ['PoE',  '802.3af, 12.95 W (T2P clear)'],
+    type2: ['PoE+', '802.3at or AUX, 25.5 W (T2P set)'],
+    aux:   ['AUX',  'bench supply, 25.5 W'],
+    none:  ['none', 'not powered (VBUS below operating threshold)'],
   }[src];
   if (!m) return `<span>${src}</span>`;
   return `<span title="${m[1]}">${m[0]}</span>`;
@@ -559,6 +559,12 @@ function renderDevices() {
                     : (!d.driver_on && !d.poe_ready) ? pill('on · pending', 'warn')
                     : pill('on', 'on');
     const gate = (name, ok) => pill(name, ok ? 'on' : 'err');
+    // CDB = hotswap inrush done, T2P = Type-1 vs Type-2/AUX class; neither
+    // gates readiness (VBUS alone does), so don't paint them as errors.
+    const poeSignals = d =>
+        `<span title="hotswap inrush / bulk cap">${d.poe_cdb_confirmed ? pill('inrush done', 'on') : pill('inrush', 'warn')}</span> `
+      + `<span title="T2P class selector">${d.poe_t2p_confirmed ? pill('Type-2/AUX', 'on') : pill('Type-1', 'off')}</span> `
+      + `<span title="the power gate">${gate('VBUS', d.poe_vbus_confirmed)}</span>`;
     return `
     <div class="card" id="card-${i}">
       <input type="checkbox" class="select-check" id="select-${i}"
@@ -580,7 +586,7 @@ function renderDevices() {
         <details class="more" data-k="${d.serial}|status" ${moreOpen.has(d.serial + '|status') ? 'open' : ''} ontoggle="onMoreToggle(this)">
           <summary>more</summary>
           ${row('Last reset reason', d.reset_reason)}
-          ${row('Power gates', `${gate('CDB', d.poe_cdb_confirmed)} ${gate('T2P', d.poe_t2p_confirmed)} ${gate('VBUS', d.poe_vbus_confirmed)}`)}
+          ${row('PoE signals', poeSignals(d))}
           ${row('Power budget', `${(d.power_budget_w ?? 0).toFixed(2)} W`)}
           ${row('Driver (desired)', desired)}
           ${row('VBUS', `${d.vbus_mv}mV`)}

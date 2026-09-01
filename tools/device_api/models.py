@@ -62,18 +62,14 @@ class DeviceInfo:
 
     @property
     def power_blocking_reason(self) -> str | None:
-        """None if power is ready; otherwise which PoE negotiation gate is
-        still blocking it (see components/admin_channel/admin_channel.c
-        handle_info()'s comment) -- useful for a UI to explain why a unit
-        that's reachable over the network still won't turn its LED on."""
+        """None if power is ready; otherwise why the LED still won't light.
+        Ready is gated on VBUS alone (see components/tps2378/tps2378.c) --
+        CDB is the hotswap inrush flag and T2P is the Type-1/Type-2 class
+        selector, neither gates readiness."""
         if self.poe_ready:
             return None
-        if not self.poe_cdb_confirmed:
-            return "waiting for PoE detection (CDB)"
-        if not self.poe_t2p_confirmed:
-            return "waiting for PoE classification (T2P)"
         if not self.poe_vbus_confirmed:
-            return "VBUS below the minimum threshold"
+            return "VBUS below the operating threshold (powering up, or the source can't sustain the load)"
         return "not ready (unknown reason)"
 
 
