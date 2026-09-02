@@ -27,8 +27,8 @@ typedef enum {
      * handle_info() in admin_channel.c (mirrored by parse_info_payload() in
      * tools/device_api/protocol.py): device/PoE/driver/DMX/dimming status
      * plus a power block (power_mode, poe_cap_pct, power_state,
-     * effective_scale_pct, budget_dw, 7 reserved bytes). Future fields
-     * consume the reserved bytes in place -- no length change. */
+     * effective_scale_pct, budget_cw, lin_enable, 6 reserved bytes).
+     * Future fields consume the reserved bytes in place -- no length change. */
     ADMIN_TYPE_INFO = 0x01,           ADMIN_TYPE_INFO_RESP = 0x81,
     ADMIN_TYPE_CHALLENGE = 0x02,      ADMIN_TYPE_CHALLENGE_RESP = 0x82,      /**< HMAC; issues a nonce. */
     ADMIN_TYPE_ON = 0x03,             ADMIN_TYPE_ON_RESP = 0x83,             /**< HMAC + nonce. */

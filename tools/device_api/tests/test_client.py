@@ -52,8 +52,8 @@ def _info_payload() -> bytes:
     buf += struct.pack(">H", 1) + bytes([0, 3])
     # dimming-mode block (8 B): hybrid, 2000 Hz, 6000 (=60 kHz /10), 20 us, 20%
     buf += bytes([2]) + struct.pack(">H", 2000) + struct.pack(">H", 6000) + struct.pack(">H", 20) + bytes([20])
-    # power block (13 B): auto, cap 51%, state full, LD 100%, 25.5 W, 7 reserved
-    buf += bytes([0, 51, 1, 100]) + struct.pack(">H", 2550) + bytes(7)
+    # power block (13 B): auto, cap 51%, state full, LD 100%, 25.5 W, lin on, 6 reserved
+    buf += bytes([0, 51, 1, 100]) + struct.pack(">H", 2550) + bytes([1]) + bytes(6)
     return bytes(buf)
 
 

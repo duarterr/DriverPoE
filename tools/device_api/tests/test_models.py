@@ -49,6 +49,7 @@ def _info(**overrides) -> DeviceInfo:
         power_state_name="full",
         power_effective_scale_pct=100,
         power_budget_w=25.5,
+        lin_enable=True,
     )
     fields.update(overrides)
     return DeviceInfo(**fields)

@@ -46,9 +46,10 @@ static hv9910_config_t s_config;
 static hv9910_dimming_t s_dimming;
 static uint32_t s_crossover_q   = HV9910_Q_ONE / 5;   /* derived from crossover_pct */
 static uint32_t s_min_on_frac_q = 0;                  /* derived from min_on_time_us x pwm_freq_hz */
+static bool     s_lin_enable    = true;               /* linearize the LD (analog) output-power transfer */
 static uint32_t s_ld_full   = 1u << 10;               /* LEDC duty for 100% on the LD timer */
 static uint32_t s_pwmd_full = 1u << 10;               /* LEDC duty for 100% on the PWMD timer */
-static uint32_t s_output_scale_q = HV9910_Q_ONE;      /* global LD-reference cap (power_manager); Q_ONE = no cap */
+static uint32_t s_output_scale_q = HV9910_Q_ONE;      /* power_manager cap, applied to the commanded level; Q_ONE = no cap */
 
 /* --- driver state ------------------------------------------------------- */
 static volatile bool s_enabled = false;              /* LED currently lit */
@@ -108,6 +109,8 @@ static void recompute_derived(void)
 
     uint64_t frac = ((uint64_t)s_dimming.min_on_time_us * s_dimming.pwm_freq_hz * HV9910_Q_ONE) / 1000000ULL;
     s_min_on_frac_q = (frac > HV9910_Q_ONE) ? HV9910_Q_ONE : (uint32_t)frac;
+
+    s_lin_enable = (s_dimming.lin_enable != 0);
 }
 
 /**
@@ -232,15 +235,17 @@ static void apply_level(uint32_t level_q)
 {
     ledc_start_if_needed();
 
-    hv9910_curve_out_t o = hv9910_curve_eval(s_dimming.mode, level_q, s_crossover_q, s_min_on_frac_q);
+    /* s_output_scale_q (the power_manager Type-1 cap) is applied to the
+     * *commanded* level, before the curve. With linearization on, the curve
+     * output is proportional to its input in physical units, so a 0.51 cap
+     * yields 0.51 of max power; PWMD keeps its full range either way. */
+    uint32_t eff_q = mul_q(level_q, s_output_scale_q);
+
+    hv9910_curve_out_t o = hv9910_curve_eval(s_dimming.mode, eff_q, s_crossover_q,
+                                             s_min_on_frac_q, s_lin_enable);
     bool lit = o.want_lit && !s_power_cut;
 
-    /* s_output_scale_q caps the LD (peak-current) reference only -- PWMD keeps
-     * its full range so dimming depth is unchanged. In PWM mode o.ld_duty_q is
-     * Q_ONE, so the scale becomes a straight peak-current cap; in ANALOG/HYBRID
-     * it scales the reference directly (both HYBRID curve branches by the same
-     * factor, so the knee stays continuous). */
-    uint32_t ld_duty   = lit ? scale_duty(mul_q(o.ld_duty_q, s_output_scale_q), s_ld_full) : 0;
+    uint32_t ld_duty   = lit ? scale_duty(o.ld_duty_q,   s_ld_full)   : 0;
     uint32_t pwmd_duty = lit ? scale_duty(o.pwmd_duty_q, s_pwmd_full) : 0;
 
     s_level_q = level_q;
@@ -326,15 +331,15 @@ static void hv_do_apply_dimming(const hv9910_dimming_t *p)
     ledc_start_if_needed();
     reconfigure_ledc();
     apply_level(s_level_q);
-    ESP_LOGI(TAG, "Dimming: mode=%u pwm=%uHz analog=%uHz min_on=%uus xover=%u%%",
+    ESP_LOGI(TAG, "Dimming: mode=%u pwm=%uHz analog=%uHz min_on=%uus xover=%u%% lin=%s",
              (unsigned)s_dimming.mode, (unsigned)s_dimming.pwm_freq_hz,
              (unsigned)s_dimming.analog_freq_hz, (unsigned)s_dimming.min_on_time_us,
-             (unsigned)s_dimming.crossover_pct);
+             (unsigned)s_dimming.crossover_pct, s_dimming.lin_enable ? "on" : "off");
 }
 
 /**
- * @brief Sets the global LD-reference cap and re-renders the current level.
- * @param percent LD scale, 1-100.
+ * @brief Sets the global output power cap and re-renders the current level.
+ * @param percent Cap, 1-100.
  * @return None.
  */
 static void hv_do_set_scale(uint8_t percent)
@@ -347,7 +352,7 @@ static void hv_do_set_scale(uint8_t percent)
     }
     s_output_scale_q = ((uint32_t)percent * HV9910_Q_ONE) / 100u;
     apply_level(s_level_q);
-    ESP_LOGI(TAG, "Output scale: LD reference capped to %u%%", (unsigned)percent);
+    ESP_LOGI(TAG, "Output power capped to %u%% of max", (unsigned)percent);
 }
 
 /**
@@ -523,6 +528,7 @@ void hv9910_init(const hv9910_config_t *config)
     s_dimming.analog_freq_hz = 60000;
     s_dimming.min_on_time_us = 20;
     s_dimming.crossover_pct = 20;
+    s_dimming.lin_enable = 1;
     recompute_derived();
 
     s_enabled = false;

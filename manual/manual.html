@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DriverPoE — Manual do Usuário</title>
+<style>
+  /* ============================================================= *
+   *  Documento (texto do manual)                                   *
+   * ============================================================= */
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #fbfbfd; color: #1c1e26;
+    font: 16px/1.62 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .doc { max-width: 860px; margin: 0 auto; padding: 48px 28px 96px; }
+  .doc h1 { font-size: 30px; letter-spacing: -.02em; margin: 0 0 4px; }
+  .doc .lede { color: #5b5f6e; font-size: 17px; margin: 0 0 32px; }
+  .doc h2 {
+    font-size: 22px; letter-spacing: -.01em; margin: 44px 0 12px;
+    padding-bottom: 6px; border-bottom: 2px solid #e7e8ee;
+  }
+  .doc h3 { font-size: 17px; margin: 26px 0 8px; }
+  .doc p, .doc li { font-size: 15.5px; }
+  .doc ul, .doc ol { padding-left: 22px; }
+  .doc li { margin: 3px 0; }
+  .doc code {
+    background: #eef0f4; border-radius: 4px; padding: 1px 5px;
+    font: 13px/1.4 ui-monospace, "SF Mono", Consolas, monospace;
+  }
+  .doc pre {
+    background: #14161d; color: #e7e9f0; border-radius: 10px; padding: 14px 16px;
+    overflow-x: auto; font: 13px/1.55 ui-monospace, "SF Mono", Consolas, monospace;
+  }
+  .doc pre code { background: none; padding: 0; color: inherit; }
+  .doc table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }
+  .doc th, .doc td { border: 1px solid #e2e3ea; padding: 7px 10px; text-align: left; vertical-align: top; }
+  .doc th { background: #f2f3f7; font-weight: 650; }
+  .doc .note {
+    border-left: 3px solid #8c63ff; background: #f4f1ff; border-radius: 0 8px 8px 0;
+    padding: 10px 14px; margin: 14px 0; font-size: 14.5px;
+  }
+  .doc .toc { background: #f2f3f7; border-radius: 10px; padding: 14px 20px; margin: 24px 0 8px; }
+  .doc .toc ol { margin: 6px 0 0; }
+  .doc a { color: #6b3ede; }
+
+  /* figuras: moldura + legenda em volta de uma renderização real da webui */
+  figure.fig { margin: 20px 0 24px; }
+  figure.fig .frame {
+    background: #060814; border: 1px solid #d7d9e2; border-radius: 16px;
+    padding: 20px; box-shadow: 0 8px 30px #0000001a; overflow-x: auto;
+  }
+  figure.fig figcaption { color: #5b5f6e; font-size: 13px; margin-top: 8px; text-align: center; }
+  figure.fig.narrow .frame { display: flex; justify-content: center; }
+
+  @media print {
+    body { background: #fff; }
+    .doc { padding: 0 0 20px; max-width: none; }
+    .doc h2 { page-break-after: avoid; }
+    figure.fig, table, pre { page-break-inside: avoid; }
+    .doc .toc { display: none; }
+  }
+
+  /* ============================================================= *
+   *  Componentes da webui, copiados de tools/webui/static/index.html
+   *  e escopados sob .wui para renderizarem idênticos dentro das
+   *  figuras deste manual (mesmo CSS, mesmo HTML).                  *
+   * ============================================================= */
+  .wui {
+    --bg: #060814; --ink: #f6f7ff; --muted: #a9afc7; --line: #ffffff1c;
+    --hot: #d6ff43; --violet: #8c63ff; --panel: #111526d9;
+    --danger: #ff6172; --warn: #ffbd5c;
+    --fg: var(--ink); --card: var(--panel); --border: var(--line);
+    --accent: var(--violet); --ok: var(--hot);
+    color: var(--fg);
+    font: 14px/1.4 Inter, ui-sans-serif, system-ui, sans-serif;
+  }
+  .wui * { box-sizing: border-box; }
+  .wui .field {
+    padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
+    background: #070a18; color: var(--fg); font: inherit; font-size: 13px; line-height: 18px;
+  }
+  .wui .field.grow { flex: 1; min-width: 160px; }
+  .wui .btn-accent {
+    appearance: none; padding: 8px 16px; border: 1px solid var(--violet); border-radius: 10px;
+    background: var(--violet); color: #fff; font: inherit; font-size: 13px; line-height: 18px;
+    font-weight: 650; cursor: pointer;
+  }
+  .wui .network-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .wui .card {
+    position: relative;
+    background: var(--card); border: 1px solid var(--border); border-radius: 18px;
+    box-shadow: 0 18px 50px #0006; padding: 18px;
+  }
+  .wui .card h2 { font-size: 16px; letter-spacing: -.02em; margin: 0 0 4px; padding-right: 28px; }
+  .wui .card .sub { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  .wui .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; font-size: 13px; }
+  .wui .row .label { color: var(--muted); }
+  .wui .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+  .wui .pill.on { background: #d6ff4322; color: var(--hot); }
+  .wui .pill.off { background: #ffffff14; color: var(--muted); }
+  .wui .pill.warn { background: #ffbd5c22; color: var(--warn); }
+  .wui .pill.err { background: #ff617222; color: var(--danger); }
+  .wui .btn {
+    min-width: 92px; padding: 7px 12px; border: 1px solid #ffffff28; border-radius: 8px;
+    background: #ffffff0c; color: var(--fg); cursor: pointer; font: inherit; font-weight: 650;
+    font-size: 12px; text-align: center;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .wui .btn-danger { color: var(--danger); border-color: #ff617255; }
+  .wui .btn-fill { flex: 1; min-width: 0; }
+  .wui .controls { margin-top: 10px; }
+  .wui .controls-row { display: flex; align-items: stretch; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .wui .controls-row:first-child { margin-top: 0; }
+  .wui .controls-row.dim-row { align-items: center; }
+  .wui .dim-wrap { position: relative; flex: 1; min-width: 100px; display: flex; align-items: center; }
+  .wui .dim-wrap input[type=range] { width: 100%; vertical-align: middle; accent-color: var(--hot); }
+  .wui .empty { color: var(--muted); padding: 40px; text-align: center; }
+  .wui .dialog {
+    border-radius: 16px; border: 1px solid var(--border); padding: 18px;
+    background: #171b2f; color: var(--fg); box-shadow: 0 24px 60px #0008;
+  }
+  .wui .dialog input[type=text] { width: 100%; padding: 8px 10px; margin: 8px 0 14px; border: 1px solid var(--border); border-radius: 8px; background: #070a18; color: var(--fg); font: inherit; }
+  .wui .dialog .actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .wui .dmx-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; max-width: 460px; }
+  .wui .dmx-form .full { grid-column: 1 / -1; }
+  .wui .dmx-form label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+  .wui .dmx-form label.inline { flex-direction: row; align-items: center; gap: 6px; color: var(--fg); font-size: 13px; }
+  .wui .dmx-form input[type=number], .wui .dmx-form select {
+    padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px;
+    background: #070a18; color: var(--fg); font: inherit; font-size: 13px;
+  }
+  .wui .dmx-form h4 { grid-column: 1 / -1; margin: 6px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--hot); }
+  .wui .dmx-form .hint { grid-column: 1 / -1; font-size: 11px; color: var(--muted); margin-top: -2px; }
+  .wui .card .info { margin: 8px 0 4px; }
+  .wui .info details.more > summary { cursor: pointer; color: var(--muted); font-size: 11px; list-style: none; padding: 3px 0; }
+  .wui .info details.more > summary::-webkit-details-marker { display: none; }
+  .wui .info details.more > summary::before { content: '\25BE\00a0'; }
+  .wui .section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em; color: var(--hot); margin: 0 0 6px; }
+  .wui .section-label-sub { margin-top: 10px; }
+  .wui .card hr.divider { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+  .wui .center-row { display: flex; justify-content: center; margin-top: 8px; }
+  .wui .dim-label { font-size: 13px; color: var(--muted); min-width: 56px; }
+  .wui .ota { margin-top: 6px; }
+  .wui .ota-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .wui .ota-row .file {
+    flex: 1; min-width: 120px; font: inherit; font-size: 12px; color: var(--muted);
+    padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: #070a18;
+  }
+  .wui .select-check { position: absolute; top: 12px; right: 12px; width: 18px; height: 18px; accent-color: var(--hot); }
+  .wui .card-frame { max-width: 300px; }
+  .wui .dialog.wide { max-width: 460px; }
+  .wui .fakeinput {
+    padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px;
+    background: #070a18; color: var(--fg); font-size: 13px;
+  }
+  .wui .fakerange {
+    height: 4px; border-radius: 99px; background: #ffffff22; position: relative; flex: 1; margin: 8px 0;
+  }
+  .wui .fakerange::after { content: ''; position: absolute; left: 70%; top: 50%; width: 13px; height: 13px; border-radius: 50%; background: var(--hot); transform: translate(-50%, -50%); }
+  .wui .swatches { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+</style>
+</head>
+<body>
+<div class="doc">
+
+<h1>DriverPoE — Manual do Usuário</h1>
+<p class="lede">Luminária LED alimentada e controlada por um único cabo de rede (Power over Ethernet).</p>
+
+<div class="toc">
+  <strong>Conteúdo</strong>
+  <ol>
+    <li>O que é</li>
+    <li>Instalação</li>
+    <li>Indicadores luminosos</li>
+    <li>O painel de administração</li>
+    <li>Controles de luz</li>
+    <li>Configurações do dispositivo (<em>Device settings</em>)</li>
+    <li>Configurações de DMX (<em>DMX settings</em>)</li>
+    <li>O que cada campo do card mostra</li>
+    <li>Trocar a chave · Atualização de firmware · Restauração de fábrica</li>
+    <li>Solução de problemas</li>
+    <li>Especificações resumidas</li>
+  </ol>
+</div>
+
+<h2>1. O que é</h2>
+<p>A <strong>DriverPoE</strong> recebe energia e comandos pelo <strong>mesmo cabo de rede</strong>. Não precisa de fonte separada, Wi-Fi, Bluetooth nem controle remoto.</p>
+<p>Pode ser operada de duas formas, ao mesmo tempo:</p>
+<ul>
+  <li><strong>Painel de administração</strong> — um aplicativo web que roda no computador do operador. Serve para instalar, configurar, ligar/desligar, ajustar brilho e atualizar o firmware.</li>
+  <li><strong>Mesa de luz / software de espetáculo</strong> — via <strong>Art-Net</strong> ou <strong>sACN (E1.31)</strong>, os padrões de DMX sobre rede. Qualquer console (grandMA, ChamSys, QLC+, Resolume, MADRIX…) enxerga a luminária como um dimmer DMX de 1 ou 2 canais.</li>
+</ul>
+
+<h2>2. Instalação</h2>
+<ol>
+  <li><strong>Ligue o cabo de rede</strong> a uma porta <strong>PoE</strong> ou <strong>PoE+</strong> do switch (ou a um injetor PoE).</li>
+  <li>A luminária liga sozinha e pede um endereço IP à rede (DHCP). Aparece na lista de clientes do roteador com o nome <code>DriverPoE</code>.</li>
+  <li><strong>O LED começa apagado.</strong> A luminária nunca acende sozinha ao ser energizada — só acende quando você manda, pelo painel web ou por um comando DMX.</li>
+  <li>Se a energia cair e voltar (piscada da rede), a luminária <strong>retoma o estado anterior</strong>: se estava acesa, volta no mesmo brilho. Um desligamento completo <strong>não</strong> é lembrado.</li>
+</ol>
+
+<h3>PoE ou PoE+?</h3>
+<table>
+  <tr><th>Alimentação</th><th>Potência disponível</th><th>Comportamento padrão</th></tr>
+  <tr><td><strong>PoE</strong> (802.3af)</td><td>12,95 W</td><td>A luminária <strong>limita a potência</strong> para não estourar esse orçamento (veja <em>Power mode</em>).</td></tr>
+  <tr><td><strong>PoE+</strong> (802.3at)</td><td>25,5 W</td><td>Opera com <strong>100% da potência</strong>.</td></tr>
+</table>
+<p>Se você precisa da potência total, use uma porta <strong>PoE+</strong>. Numa porta PoE comum a luminária funciona, mas com brilho máximo reduzido.</p>
+
+<h2>3. Indicadores luminosos</h2>
+<table>
+  <tr><th>LED</th><th>Significado</th></tr>
+  <tr><td><strong>Azul</strong></td><td>Aceso = energia OK. Piscando = energia ainda não confirmada, <strong>ou</strong> a luminária está em "PoE+ obrigatório" e só há PoE comum.</td></tr>
+  <tr><td><strong>Vermelho</strong></td><td>Aceso enquanto o LED principal está ligado.</td></tr>
+</table>
+
+<h2>4. O painel de administração</h2>
+
+<h3>Abrir</h3>
+<p>O painel roda no <strong>seu computador</strong>, não na luminária. Instale as dependências uma vez e execute:</p>
+<pre><code>pip install -r tools/webui/requirements.txt
+cd tools
+python -m webui.app</code></pre>
+<p>Abra <code>http://127.0.0.1:8000/</code> no navegador. O painel só escuta em <code>localhost</code> — mantenha-o na máquina do operador, não exponha na rede.</p>
+
+<figure class="fig">
+  <div class="frame"><div class="wui">
+    <div class="card" style="border:none;box-shadow:none;padding:0;background:none;">
+      <h2>Network</h2>
+      <div class="network-row">
+        <span class="field" style="min-width:120px;color:var(--muted);">Interface…</span>
+        <span class="field grow" style="color:var(--muted);">broadcast (auto)</span>
+        <span class="btn">Keys file</span>
+        <span class="btn-accent">Scan network</span>
+      </div>
+      <div class="sub" style="margin-top:10px;text-align:center;">3 luminaires found.</div>
+    </div>
+  </div></div>
+  <figcaption>Barra superior: carregue o arquivo de chaves em <strong>Keys file</strong>, depois <strong>Scan network</strong>.</figcaption>
+</figure>
+
+<h3>Arquivo de chaves</h3>
+<p>Cada luminária tem uma <strong>chave de administração</strong> (como a senha padrão na etiqueta de um roteador). Sem a chave certa, o painel <strong>vê</strong> o estado da luminária mas <strong>não a comanda</strong>.</p>
+<p>Clique em <strong>"Keys file"</strong> e escolha um arquivo de texto. Ele fica só na memória — nada é gravado em disco. Cada card mostra então uma etiqueta <strong>Admin auth</strong>:</p>
+
+<figure class="fig narrow">
+  <div class="frame"><div class="wui"><div class="swatches">
+    <span class="pill on">Authenticated</span>
+    <span class="pill warn">Factory default</span>
+    <span class="pill err">No key</span>
+  </div></div></div>
+  <figcaption><strong>Authenticated</strong>: sua chave funciona. <strong>Factory default</strong>: a luminária ainda está com a chave de fábrica (pública) — <strong>troque-a</strong>. <strong>No key</strong>: nenhuma chave conhecida funciona.</figcaption>
+</figure>
+
+<p>Formato do arquivo (uma entrada por linha):</p>
+<pre><code># série da luminária                    chave (64 dígitos hex)
+DriverPoE-A4CF12B93D08                  b64c3218d228279b9b2190c685de3dab76325f4e5482ba452f917b2e19762ad9
+all others                             4472697665...2121   # chave de fábrica, p/ unidades novas</code></pre>
+<p>Uma linha <code>all others</code> é uma chave "curinga" para qualquer série sem entrada própria. Pode haver mais de uma (tentadas na ordem do arquivo). Separadores aceitos: espaço ou <code>/ : = ,</code>.</p>
+
+<h3>Localizar as luminárias</h3>
+<p>Clique em <strong>"Scan network"</strong>. Cada luminária que responder vira um card. Se nada aparecer, confira o endereço de broadcast e se estão na mesma sub-rede.</p>
+
+<h2>5. Controles de luz</h2>
+
+<figure class="fig narrow">
+  <div class="frame"><div class="wui"><div class="card card-frame">
+    <input type="checkbox" class="select-check" checked disabled>
+    <h2>DriverPoE-A4CF12B93D08</h2>
+
+    <div class="section-label">Device info</div>
+    <div class="sub">192.168.1.47 &middot; fw 1.4.0 &middot; A4:CF:12:B9:3D:08</div>
+    <div class="row"><span class="label">Admin auth</span> <span><span class="pill on">Authenticated</span></span></div>
+
+    <hr class="divider">
+
+    <div class="section-label">Device status</div>
+    <div class="info">
+      <div class="row"><span class="label">Uptime</span> <span>3421s</span></div>
+      <div class="row"><span class="label">Power</span> <span><span class="pill on">Ready</span> &middot; <span title="802.3at ou AUX">PoE+</span> &middot; <span class="pill on">Full power</span></span></div>
+      <div class="row"><span class="label">Driver (actual)</span> <span><span class="pill on">On 70%</span></span></div>
+      <details class="more" open>
+        <summary>more</summary>
+        <div class="row"><span class="label">Last reset reason</span> <span>POWERON</span></div>
+        <div class="row"><span class="label">PoE signals</span> <span><span class="pill on">Inrush done</span> <span class="pill on">Type-2/AUX</span> <span class="pill on">VBUS</span></span></div>
+        <div class="row"><span class="label">Power budget</span> <span>25.50 W</span></div>
+        <div class="row"><span class="label">Driver (desired)</span> <span><span class="pill on">On</span></span></div>
+        <div class="row"><span class="label">VBUS</span> <span>50981mV</span></div>
+        <div class="row"><span class="label">LED voltage</span> <span>34120mV</span></div>
+      </details>
+    </div>
+    <div class="center-row"><span class="btn">Get status</span></div>
+
+    <hr class="divider">
+
+    <div class="section-label">Light controls</div>
+    <div class="controls">
+      <div class="controls-row">
+        <span class="btn btn-fill">On</span><span class="btn btn-fill">Off</span><span class="btn btn-fill">Identify</span>
+      </div>
+      <div class="controls-row dim-row">
+        <span class="dim-label">Dimming</span>
+        <div class="dim-wrap"><div class="fakerange"></div></div>
+      </div>
+    </div>
+
+    <hr class="divider">
+
+    <div class="section-label section-label-sub">Admin controls</div>
+    <div class="controls">
+      <div class="controls-row">
+        <span class="btn btn-danger btn-fill">Reboot</span><span class="btn btn-danger btn-fill">Factory reset</span><span class="btn btn-danger btn-fill">Change key</span>
+      </div>
+    </div>
+
+    <hr class="divider">
+
+    <div class="section-label">DMX / Art-Net / sACN</div>
+    <div class="info">
+      <div class="row"><span class="label">Status</span> <span><span class="pill on">Enabled</span></span></div>
+      <div class="row"><span class="label">DMX level</span> <span>70%</span></div>
+      <div class="row"><span class="label">Frame rate</span> <span>44/s</span></div>
+      <details class="more" open>
+        <summary>more</summary>
+        <div class="row"><span class="label">Live source</span> <span><span class="pill on">sACN</span></span></div>
+        <div class="row"><span class="label">Last source IP</span> <span>192.168.1.20</span></div>
+        <div class="row"><span class="label">Protocols</span> <span>Art-Net + sACN</span></div>
+        <div class="row"><span class="label">sACN universe</span> <span>1</span></div>
+        <div class="row"><span class="label">DMX start address</span> <span>1</span></div>
+        <div class="row"><span class="label">Personality</span> <span>2 ch - intensity 16-bit</span></div>
+      </details>
+    </div>
+    <div class="center-row"><span class="btn">DMX settings</span></div>
+
+    <hr class="divider">
+
+    <div class="section-label">Device settings</div>
+    <div class="info">
+      <div class="row"><span class="label">Power mode</span> <span><span class="pill on">Auto</span></span></div>
+      <div class="row"><span class="label">PoE cap</span> <span>51% of max power</span></div>
+      <div class="row"><span class="label">Dimming mode</span> <span><span class="pill on">Hybrid</span></span></div>
+      <div class="row"><span class="label">Linearization</span> <span><span class="pill on">On</span></span></div>
+      <div class="row"><span class="label">PWM path</span> <span>2000 Hz &middot; 20 us min on-time</span></div>
+      <div class="row"><span class="label">Analog path</span> <span>60000 Hz</span></div>
+      <div class="row"><span class="label">Crossover</span> <span>20%</span></div>
+    </div>
+    <div class="center-row"><span class="btn">Device settings</span></div>
+
+    <hr class="divider">
+
+    <div class="section-label">OTA</div>
+    <div class="ota"><div class="ota-row">
+      <span class="file">build/driverpoe.bin</span>
+      <span class="btn">Upload firmware</span>
+    </div></div>
+  </div></div></div>
+  <figcaption>Um card de luminária (com as seções "more" expandidas). É a unidade de trabalho do painel.</figcaption>
+</figure>
+
+<table>
+  <tr><th>Botão / controle</th><th>O que faz</th></tr>
+  <tr><td><strong>On</strong></td><td>Acende no último brilho usado nesta sessão (ou 100% se nenhum).</td></tr>
+  <tr><td><strong>Off</strong></td><td>Apaga.</td></tr>
+  <tr><td><strong>Identify</strong></td><td>Faz a luminária <strong>piscar</strong> algumas vezes, para identificá-la fisicamente.</td></tr>
+  <tr><td><strong>Dimming</strong> (barra)</td><td>Ajusta o brilho de 0 a 100%. Aplicado <strong>na hora</strong> — a luminária não faz <em>fade</em>; transições suaves vêm da mesa de luz.</td></tr>
+  <tr><td><strong>Get status</strong></td><td>Relê o estado da luminária agora.</td></tr>
+</table>
+<p>Enquanto uma mesa DMX envia sinal, ela tem prioridade: um comando <em>On/Off/Dimming</em> do painel é sobrescrito pelo próximo quadro DMX. Quando o sinal DMX some, o painel volta a mandar.</p>
+
+<h2>6. Configurações do dispositivo (<em>Device settings</em>)</h2>
+<p>Botão <strong>"Device settings"</strong> no card. Tudo aqui é gravado na luminária e sobrevive a reinícios.</p>
+
+<figure class="fig narrow">
+  <div class="frame"><div class="wui"><div class="dialog wide">
+    <h2 style="margin:0 0 4px;font-size:16px;">Device settings — DriverPoE-A4CF12B93D08</h2>
+    <div class="sub" style="margin-bottom:10px;">The device clamps out-of-range values. Every level change is applied at once.</div>
+    <div class="dmx-form">
+      <h4>Power</h4>
+      <label class="full">Power mode
+        <span class="fakeinput">Auto (PoE+ when available, else PoE cap)</span>
+      </label>
+      <label>PoE cap (% of max power, 10-100)<span class="fakeinput">51</span></label>
+      <div class="hint">On Type-1 PoE. 51 &asymp; 12.95 W / 25.5 W. Accurate as "% of max power" only with linearization on.</div>
+
+      <h4>Dimming mode</h4>
+      <label class="full">Dimming mode<span class="fakeinput">Hybrid (analog + PWM)</span></label>
+      <label class="inline full"><input type="checkbox" checked disabled> Linearize analog output power</label>
+      <div class="hint">Pre-distorts the LD drive so measured power tracks the commanded level. Affects Analog &amp; Hybrid (PWM has no analog path). Off = raw hardware curve.</div>
+
+      <h4>PWM path (PWM &amp; Hybrid)</h4>
+      <label>Frequency (Hz, 1000-5000)<span class="fakeinput">2000</span></label>
+      <label>Min on-time (us, 2-200)<span class="fakeinput">20</span></label>
+
+      <h4>Analog path (Analog &amp; Hybrid)</h4>
+      <label>Frequency (Hz, 40000-80000)<span class="fakeinput">60000</span></label>
+
+      <h4>Hybrid</h4>
+      <label>Crossover (% of output, 10-60)<span class="fakeinput">20</span></label>
+    </div>
+    <div class="actions" style="margin-top:12px;">
+      <span class="btn">Cancel</span><span class="btn-accent">Save to device</span>
+    </div>
+  </div></div></div>
+  <figcaption>Diálogo <em>Device settings</em>.</figcaption>
+</figure>
+
+<h3>Energia</h3>
+<table>
+  <tr><th>Configuração</th><th>O que é</th></tr>
+  <tr><td><strong>Power mode</strong></td><td>Política de energia — veja a tabela abaixo.</td></tr>
+  <tr><td><strong>PoE cap</strong> (% of max power)</td><td>Quando a luminária está limitada (modo PoE), qual fração da potência máxima ela pode usar. Padrão <strong>51%</strong> (≈ 12,95 W / 25,5 W). Só é um "% de potência" honesto com a linearização ligada.</td></tr>
+</table>
+
+<table>
+  <tr><th>Power mode</th><th>Em PoE+ (ou AUX)</th><th>Em PoE comum</th></tr>
+  <tr><td><strong>Auto</strong> <em>(padrão)</em></td><td>100% da potência</td><td>Limita ao <code>PoE cap</code></td></tr>
+  <tr><td><strong>PoE only</strong></td><td>Limita ao <code>PoE cap</code> (força o orçamento PoE mesmo tendo PoE+)</td><td>Limita ao <code>PoE cap</code></td></tr>
+  <tr><td><strong>PoE+ required</strong></td><td>100% da potência</td><td><strong>Não acende</strong> — LED azul pisca. Comandos ficam pendentes e a luz acende sozinha assim que um PoE+ aparecer.</td></tr>
+</table>
+<p>Use <strong>PoE+ required</strong> em instalações que exigem brilho total e não podem operar reduzidas por engano. O modo é reavaliado na hora: trocar a luminária de porta PoE→PoE+ (ou mudar o modo no painel) tem efeito imediato, sem reiniciar.</p>
+
+<h3>Modo de dimerização</h3>
+<table>
+  <tr><th>Modo</th><th>Como se comporta</th></tr>
+  <tr><td><strong>Hybrid</strong> <em>(padrão)</em></td><td>Analógico na parte de cima da escala, PWM na de baixo. Junta o melhor dos dois: sem cintilação no topo, com profundidade e precisão embaixo. <strong>Recomendado.</strong></td></tr>
+  <tr><td><strong>Analog</strong></td><td>Sem cintilação em nenhum ponto (bom para câmera lenta / vídeo), mas fica impreciso e com leve desvio de cor abaixo de ~10%.</td></tr>
+  <tr><td><strong>PWM</strong></td><td>Cor perfeitamente estável em qualquer brilho, mas "recorta" a luz — pode bater com o obturador de câmeras. Resolução limitada no fundo da escala.</td></tr>
+</table>
+
+<h3>Linearização de potência</h3>
+<p><strong>Linearize analog output power</strong> — quando <strong>ligado</strong> (padrão), corrige a curva do hardware para que a potência entregue acompanhe o comando: 50% ≈ metade da potência, 80% ≈ 80%, etc. Sem ela, "50%" produz só ~16% da potência (a eletrônica do driver é fortemente não-linear). Afeta <strong>Analog</strong> e <strong>Hybrid</strong>; o modo <strong>PWM</strong> já é linear e não muda. Desligue apenas para comparar / medir a curva crua.</p>
+
+<h3>Ajustes finos (raramente necessários)</h3>
+<table>
+  <tr><th>Configuração</th><th>Faixa / padrão</th><th>O que é</th></tr>
+  <tr><td>PWM path — Frequency</td><td>1000–5000 Hz / <strong>2000</strong></td><td>Frequência de recorte do PWM. Mais alta = menos risco de cintilação em câmera, menos resolução no fundo da escala.</td></tr>
+  <tr><td>PWM path — Min on-time</td><td>2–200 µs / <strong>20</strong></td><td>Menor pulso de condução. Abaixo de ~6 µs o driver não estabiliza e o fundo da escala fica errático — deixe em ~20.</td></tr>
+  <tr><td>Analog path — Frequency</td><td>40000–80000 Hz / <strong>60000</strong></td><td>Frequência do sinal analógico. Não mexa sem motivo.</td></tr>
+  <tr><td>Hybrid — Crossover</td><td>10–60% / <strong>20</strong></td><td>Onde o modo Hybrid troca de analógico (acima) para PWM (abaixo).</td></tr>
+</table>
+
+<h2>7. Configurações de DMX (<em>DMX settings</em>)</h2>
+<p>Botão <strong>"DMX settings"</strong> no card. <strong>A camada DMX vem desativada de fábrica</strong> — ative-a na comissão.</p>
+
+<div class="note"><strong>Segurança:</strong> Art-Net e sACN <strong>não têm autenticação</strong>, igual ao DMX físico. Só use numa rede de gerenciamento/entretenimento confiável. O painel de administração continua independente e protegido por chave.</div>
+
+<figure class="fig narrow">
+  <div class="frame"><div class="wui"><div class="dialog wide">
+    <h2 style="margin:0 0 4px;font-size:16px;">DMX settings — DriverPoE-A4CF12B93D08</h2>
+    <div class="sub" style="margin-bottom:10px;">Commissioning for the Art-Net / sACN control layer. The device clamps out-of-range values.</div>
+    <div class="dmx-form">
+      <label class="inline full"><input type="checkbox" checked disabled> Enable the DMX layer</label>
+
+      <h4>Protocols</h4>
+      <label class="inline"><input type="checkbox" checked disabled> Art-Net (UDP 6454)</label>
+      <label class="inline"><input type="checkbox" checked disabled> sACN / E1.31 (UDP 5568)</label>
+
+      <h4>Art-Net universe</h4>
+      <label>Net (0-127)<span class="fakeinput">0</span></label>
+      <label>Sub-Net (0-15)<span class="fakeinput">0</span></label>
+      <label>Universe (0-15)<span class="fakeinput">0</span></label>
+      <label>sACN universe (1-63999)<span class="fakeinput">1</span></label>
+
+      <h4>Fixture</h4>
+      <label>DMX start address (1-512)<span class="fakeinput">1</span></label>
+      <label>Personality<span class="fakeinput">2 channels - intensity 16-bit</span></label>
+      <label>Merge mode<span class="fakeinput">HTP (highest takes precedence)</span></label>
+      <label>Inter-frame smoothing (ms)<span class="fakeinput">25</span></label>
+
+      <h4>On signal loss</h4>
+      <label>Behavior<span class="fakeinput">Hold last level</span></label>
+      <label>Set level % (for "fade to a set level")<span class="fakeinput">0</span></label>
+      <label>Timeout before "lost" (ms)<span class="fakeinput">3000</span></label>
+      <label class="inline"><input type="checkbox" disabled> Accept ArtAddress from the network</label>
+    </div>
+    <div class="actions" style="margin-top:12px;">
+      <span class="btn">Cancel</span><span class="btn-accent">Save to device</span>
+    </div>
+  </div></div></div>
+  <figcaption>Diálogo <em>DMX settings</em>.</figcaption>
+</figure>
+
+<table>
+  <tr><th>Configuração</th><th>O que é</th></tr>
+  <tr><td><strong>Enable the DMX layer</strong></td><td>Liga/desliga a recepção de Art-Net e sACN.</td></tr>
+  <tr><td><strong>Protocols</strong></td><td>Art-Net, sACN, ou os dois.</td></tr>
+  <tr><td><strong>Art-Net universe</strong></td><td>Endereço de 15 bits: <code>Net (0–127) / Sub-Net (0–15) / Universe (0–15)</code>.</td></tr>
+  <tr><td><strong>sACN universe</strong></td><td>1 a 63999.</td></tr>
+  <tr><td><strong>DMX start address</strong></td><td>Primeiro canal DMX que a luminária escuta (1–512).</td></tr>
+  <tr><td><strong>Personality</strong></td><td><strong>1 canal</strong> (intensidade, 8 bits) ou <strong>2 canais</strong> (intensidade, 16 bits — mais suave).</td></tr>
+  <tr><td><strong>Merge mode</strong></td><td>Quando duas fontes mandam ao mesmo tempo: <strong>HTP</strong> (vence o maior valor, padrão) ou <strong>LTP</strong> (vence o último a mudar). A fonte de maior <em>priority</em> (sACN) é considerada primeiro.</td></tr>
+  <tr><td><strong>Inter-frame smoothing</strong></td><td>Amortece variações bruscas entre quadros DMX (ms). Padrão 25.</td></tr>
+  <tr><td><strong>On signal loss — Behavior</strong></td><td>Sem sinal DMX por um tempo: <strong>Hold last level</strong>, <strong>Fade to black</strong> ou <strong>Fade to a set level</strong>.</td></tr>
+  <tr><td><strong>Set level %</strong></td><td>Nível usado por "fade to a set level".</td></tr>
+  <tr><td><strong>Timeout before "lost"</strong></td><td>Quanto tempo sem sinal antes de aplicar o comportamento acima. Padrão 3000 ms.</td></tr>
+  <tr><td><strong>Accept ArtAddress</strong></td><td>Permite que um console reprograme o endereçamento pela rede, via Art-Net.</td></tr>
+</table>
+<p>Depois de configurada, a luminária responde a <code>ArtPoll</code> e aparece nomeada nos consoles. RDM não é suportado.</p>
+
+<h2>8. O que cada campo do card mostra</h2>
+<table>
+  <tr><th>Campo</th><th>Valores</th></tr>
+  <tr><td><strong>Power</strong></td><td><code>Ready</code> / <code>Not ready</code> · fonte (<code>PoE</code> / <code>PoE+</code> / <code>AUX</code>) · estado (<code>Full power</code>, <code>Capped 51%</code>, <code>PoE+ required</code>)</td></tr>
+  <tr><td><strong>Driver (actual)</strong></td><td><code>On XX%</code> / <code>Off</code> — o que a luz está fazendo agora</td></tr>
+  <tr><td><strong>Driver (desired)</strong></td><td>O que foi pedido (pode estar "pending" se a energia ainda não permite)</td></tr>
+  <tr><td><strong>Power budget</strong></td><td>Orçamento negociado: 12,95 W (PoE) ou 25,5 W (PoE+)</td></tr>
+  <tr><td><strong>PoE signals</strong></td><td>Diagnóstico: <code>Inrush done</code> (partida concluída) · <code>Type-1</code>/<code>Type-2/AUX</code> (classe) · <code>VBUS</code> (tensão OK)</td></tr>
+  <tr><td><strong>VBUS</strong></td><td>Tensão do barramento PoE (deve estar acima de 40 V)</td></tr>
+  <tr><td><strong>Uptime</strong> / <strong>Last reset reason</strong></td><td>Há quanto tempo ligada / motivo do último reinício</td></tr>
+</table>
+
+<h2>9. Manutenção</h2>
+
+<h3>Trocar a chave de administração</h3>
+<p>No card, <strong>"Change key"</strong>. A nova chave é mostrada <strong>uma vez</strong> ao operador — <strong>anote e guarde no seu arquivo de chaves</strong>. Não é recuperável depois. Faça isso na instalação, em toda luminária com a etiqueta <strong>Factory default</strong>.</p>
+
+<h3>Atualização de firmware (OTA)</h3>
+<ol>
+  <li>No card, campo de arquivo + botão <strong>"Upload firmware"</strong>.</li>
+  <li>Escolha o arquivo <code>.bin</code> e envie. Uma barra mostra o progresso.</li>
+  <li>Ao terminar, o painel oferece <strong>reiniciar</strong> a luminária para aplicar.</li>
+  <li>A imagem nova <strong>só roda depois do reinício</strong> — nunca automaticamente. Se travar ou não confirmar que está saudável, a luminária <strong>volta sozinha</strong> ao firmware anterior.</li>
+</ol>
+<p>A transferência é verificada por SHA-256 antes de ser aplicada; uma transferência interrompida não danifica nada.</p>
+
+<h3>Restauração de fábrica</h3>
+<p>No card, <strong>"Factory reset"</strong>. Apaga <strong>tudo</strong> que foi configurado: a chave de administração (volta à chave de fábrica pública), toda a configuração de DMX (volta a desativada) e as configurações do dispositivo (volta a Hybrid / Auto / linearização ligada).</p>
+
+<h2>10. Solução de problemas</h2>
+<table>
+  <tr><th>Sintoma</th><th>Causa provável / o que fazer</th></tr>
+  <tr><td><strong>Não aparece no "Scan network"</strong></td><td>Luminária em outra sub-rede; endereço de broadcast errado; firewall bloqueando UDP. Confira o campo de broadcast e rode o scan de novo.</td></tr>
+  <tr><td><strong>Aparece, mas "Not ready"</strong></td><td>Tensão PoE abaixo de 40 V — cabo muito longo, switch sem orçamento de energia, ou a fonte não sustenta a carga. Veja o campo <strong>VBUS</strong>.</td></tr>
+  <tr><td><strong>LED azul piscando, luz não acende</strong></td><td>Modo <strong>PoE+ required</strong> e só há PoE comum. Ligue numa porta PoE+, ou mude o <em>Power mode</em> para <strong>Auto</strong>.</td></tr>
+  <tr><td><strong>Comando aceito mas a luz não acende ("pending")</strong></td><td>A energia ainda não foi confirmada (ou a política de energia não permite). A luz acende sozinha quando a condição for satisfeita.</td></tr>
+  <tr><td><strong>Brilho máximo baixo</strong></td><td>Em PoE comum (não PoE+) a luminária limita a potência. Confira <strong>Power mode</strong> e <strong>PoE cap</strong>, ou passe para uma porta PoE+.</td></tr>
+  <tr><td><strong>Card diz "Full power" numa luminária em PoE</strong></td><td>O <strong>PoE cap</strong> está em 100% (cap desligado) — ela está puxando acima do orçamento PoE. Ajuste para 51% ou o valor medido.</td></tr>
+  <tr><td><strong>Brilho não é proporcional ao comando</strong></td><td>Linearização desligada. Ligue <strong>"Linearize analog output power"</strong> no <em>Device settings</em> (ou use o modo <strong>PWM</strong>).</td></tr>
+  <tr><td><strong>Cintilação em câmera</strong></td><td>Use o modo <strong>Analog</strong>, ou aumente a <strong>frequência PWM</strong>.</td></tr>
+  <tr><td><strong>Não responde ao console DMX</strong></td><td>Camada DMX desativada, universo/endereço errados, ou protocolo (Art-Net × sACN) diferente. Confira em <strong>DMX settings</strong>.</td></tr>
+  <tr><td><strong>"Admin auth: No key"</strong></td><td>A chave da luminária não está no seu arquivo. Se ela é nova, adicione a linha <code>all others</code> com a chave de fábrica.</td></tr>
+  <tr><td><strong>Esqueci a chave</strong></td><td><strong>Factory reset</strong> (volta à chave de fábrica) — apaga também toda a configuração.</td></tr>
+</table>
+
+<h2>11. Especificações resumidas</h2>
+<table>
+  <tr><th>Item</th><th>Valor</th></tr>
+  <tr><td>Alimentação</td><td>PoE (802.3af, 12,95 W) ou PoE+ (802.3at, 25,5 W)</td></tr>
+  <tr><td>Tensão mínima do barramento</td><td>40 V</td></tr>
+  <tr><td>Rede</td><td>Ethernet 10/100, DHCP, hostname <code>DriverPoE</code></td></tr>
+  <tr><td>Rádio</td><td>Nenhum (sem Wi-Fi / Bluetooth)</td></tr>
+  <tr><td>Controle</td><td>Painel web (autenticado) · Art-Net (UDP 6454) · sACN / E1.31 (UDP 5568)</td></tr>
+  <tr><td>Canais DMX</td><td>1 (8 bits) ou 2 (16 bits) — só intensidade</td></tr>
+  <tr><td>Modos de dimerização</td><td>Hybrid (padrão), Analog, PWM</td></tr>
+  <tr><td>Faixa de brilho</td><td>0–100%, aplicado instantaneamente</td></tr>
+  <tr><td>Atualização de firmware</td><td>OTA pela rede, com verificação e rollback automático</td></tr>
+</table>
+
+<p style="color:#8b8e9c;font-size:13px;margin-top:40px;">As figuras deste manual são renderizadas com o mesmo CSS do painel (<code>tools/webui/</code>) — o que você vê aqui é o que aparece na tela. Para gerar um PDF, abra este arquivo no navegador e use <strong>Imprimir → Salvar como PDF</strong>.</p>
+
+</div>
+</body>
+</html>

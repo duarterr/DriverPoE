@@ -52,6 +52,7 @@ typedef struct {
     uint32_t analog_freq_hz; /**< LD (RC-fed) PWM frequency, 40000..80000. */
     uint16_t min_on_time_us; /**< PWMD minimum conduction burst, 2..200. */
     uint8_t  crossover_pct;  /**< HYBRID knee, 10..60. */
+    uint8_t  lin_enable;     /**< 0/1: linearize the LD (analog) output-power transfer. */
 } hv9910_dimming_t;
 
 /**
@@ -72,19 +73,20 @@ void hv9910_init(const hv9910_config_t *config);
 void hv9910_set_dimming(const hv9910_dimming_t *p);
 
 /**
- * @brief Sets a global scale on the LD (linear-dimming / peak-current)
- * output, applied under every level and every dimming mode. Used by the
- * power manager to cap the fixture to the Type-1 PoE budget: the commanded
- * 0-100 scale is unchanged, only the peak LED current is reduced. PWMD is
- * not touched, so full dimming depth is preserved. 100 = no cap.
- * @param percent LD scale, 1-100 (clamped).
+ * @brief Caps the fixture's output power, applied under every level and every
+ * dimming mode. Used by the power manager for the Type-1 PoE budget: the
+ * commanded 0-100 scale is unchanged for the user, the ceiling drops. It
+ * scales the commanded level before the dimming curve, so with output-power
+ * linearization enabled the cap is an honest "% of max power"; PWMD keeps
+ * its full range so dimming depth is preserved. 100 = no cap.
+ * @param percent Power cap, 1-100 (clamped).
  * @return None.
  */
 void hv9910_set_output_scale(uint8_t percent);
 
 /**
- * @brief Gets the current LD output scale.
- * @return Scale in percent, 1-100 (100 = no cap).
+ * @brief Gets the current output power cap.
+ * @return Cap in percent, 1-100 (100 = no cap).
  */
 uint8_t hv9910_get_output_scale_pct(void);
 

@@ -298,7 +298,7 @@
         </select>
       </label>
       <label>PoE cap (% of max power, 10-100)<input type="number" id="drv-poe_cap_pct" min="10" max="100"></label>
-      <div class="hint">Applied to the LD current reference on Type-1 PoE. 51 &asymp; 12.95 W / 25.5 W.</div>
+      <div class="hint">On Type-1 PoE. 51 &asymp; 12.95 W / 25.5 W. Accurate as "% of max power" only with linearization on.</div>
 
       <h4>Dimming mode</h4>
       <label class="full">Dimming mode
@@ -308,6 +308,8 @@
           <option value="0">PWM (PWMD only) - Less chromatic shift</option>
         </select>
       </label>
+      <label class="inline full"><input type="checkbox" id="drv-lin_enable"> Linearize analog output power</label>
+      <div class="hint">Pre-distorts the LD drive so measured power tracks the commanded level. Affects Analog &amp; Hybrid (PWM has no analog path). Off = raw hardware curve.</div>
 
       <h4>PWM path (PWM &amp; Hybrid)</h4>
       <label>Frequency (Hz, 1000-5000)<input type="number" id="drv-pwm_freq_hz" min="1000" max="5000" step="100"></label>
@@ -539,6 +541,7 @@ function deviceCfgRows(d) {
           + row('PoE cap', `${d.poe_cap_pct ?? 0}% of max power`);
   const mode = d.dimming_mode ?? 2;
   out += row('Dimming mode', pill(DRIVER_MODE[mode] ?? mode, 'on'));
+  out += row('Linearization', d.lin_enable ? pill('On', 'on') : pill('Off', 'off'));
   if (mode === 0 || mode === 2) {
     out += row('PWM path', `${d.dimming_pwm_freq_hz ?? 0} Hz · ${d.dimming_min_on_time_us ?? 0} us min on-time`);
   }
@@ -550,6 +553,9 @@ function deviceCfgRows(d) {
 function renderDevices() {
   const el = document.getElementById('devices');
   if (!devices.length) {
+    // Clear any cards from a previous scan -- a re-scan that finds nothing
+    // must not leave stale cards on screen (the scan-status line explains why).
+    el.innerHTML = '<div class="empty">No luminaires found.</div>';
     updateBulkBar();
     return;
   }
@@ -1046,6 +1052,7 @@ function openDimmingDialog(i) {
   const set = (id, v) => { document.getElementById(id).value = v; };
   set('drv-power_mode', d.power_mode ?? 0);
   set('drv-poe_cap_pct', d.poe_cap_pct ?? 51);
+  document.getElementById('drv-lin_enable').checked = d.lin_enable ?? true;
   set('drv-mode', d.dimming_mode ?? 2);
   set('drv-pwm_freq_hz', d.dimming_pwm_freq_hz ?? 2000);
   set('drv-min_on_time_us', d.dimming_min_on_time_us ?? 20);
@@ -1071,6 +1078,7 @@ document.getElementById('dimmingDialogSave').addEventListener('click', async () 
     crossover_pct: num('drv-crossover_pct'),
     power_mode: num('drv-power_mode'),
     poe_cap_pct: num('drv-poe_cap_pct'),
+    lin_enable: document.getElementById('drv-lin_enable').checked,
   };
 
   let secretHex = null;
