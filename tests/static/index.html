@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DriverPoE sweep</title>
+<style>
+  :root {
+    --bg: #060814; --ink: #f6f7ff; --muted: #a9afc7; --line: #ffffff1c;
+    --hot: #d6ff43; --violet: #8c63ff; --panel: #111526d9;
+    --danger: #ff6172; --warn: #ffbd5c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
+    font: 14px/1.45 Inter, ui-sans-serif, system-ui, sans-serif;
+  }
+  header { border-bottom: 1px solid var(--line); background: var(--panel); }
+  .header-inner { max-width: 1180px; margin: 0 auto; padding: 14px 20px; display: flex; align-items: baseline; gap: 12px; }
+  header h1 { font-size: 19px; letter-spacing: -.03em; margin: 0; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .shell { max-width: 1180px; margin: 0 auto; padding: 18px 20px 60px; display: grid; gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+  .card h2 { font-size: 15px; letter-spacing: -.02em; margin: 0 0 10px; }
+  .grid { display: grid; gap: 10px 14px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  label.f { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+  label.cb { flex-direction: row; align-items: center; gap: 8px; color: var(--ink); font-size: 13px; }
+  .field {
+    padding: 7px 9px; border: 1px solid var(--line); border-radius: 9px;
+    background: #070a18; color: var(--ink); font: inherit; font-size: 13px;
+  }
+  button {
+    appearance: none; padding: 8px 15px; border: 1px solid var(--violet); border-radius: 9px;
+    background: var(--violet); color: #fff; font: inherit; font-size: 13px; font-weight: 650; cursor: pointer;
+  }
+  button.ghost { background: #ffffff0c; border-color: #ffffff28; color: var(--ink); }
+  button.danger { background: var(--danger); border-color: var(--danger); }
+  button:disabled { opacity: .45; cursor: default; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .msg { font-size: 12px; color: var(--muted); margin-top: 8px; white-space: pre-wrap; }
+  .msg.err { color: var(--danger); }
+  .msg.ok { color: var(--hot); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; background: #ffffff14; color: var(--muted); }
+  .pill.on { background: #d6ff4322; color: var(--hot); }
+  .boards { display: grid; gap: 6px; }
+  .board { display: flex; align-items: center; gap: 10px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 9px; background: #070a18; font-size: 13px; }
+  .board .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+  .board .sp { flex: 1; }
+  progress { width: 100%; height: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { padding: 5px 8px; text-align: right; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+  thead th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
+  .tablewrap { max-height: 420px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+  pre.log {
+    background: #04060f; border: 1px solid var(--line); border-radius: 10px; padding: 10px;
+    font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; color: var(--muted);
+    max-height: 240px; overflow: auto; white-space: pre-wrap; margin: 0;
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="header-inner">
+    <h1>DriverPoE sweep</h1>
+    <span class="sub">Rigol DP1308A + DriverPoE &mdash; automated dimming / power sweep</span>
+  </div>
+</header>
+
+<div class="shell">
+
+  <div class="card">
+    <h2>Bench connection</h2>
+    <div class="grid">
+      <label class="f">PSU host / IP
+        <input id="psuHost" class="field" placeholder="192.168.1.50">
+      </label>
+      <label class="f">PSU port
+        <input id="psuPort" class="field" type="number" value="5555">
+      </label>
+      <label class="cb"><input id="fake" type="checkbox"> Simulate PSU (no hardware)</label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="ghost" id="btnPsu">Test PSU</button>
+      <span id="psuMsg" class="msg"></span>
+    </div>
+    <hr style="border:none;border-top:1px solid var(--line);margin:14px 0">
+    <div class="row">
+      <input id="keysFile" class="field" type="file" accept=".txt,.keys,text/plain">
+      <button class="ghost" id="btnKeys">Load keys</button>
+      <button class="ghost" id="btnKeysClear">Clear</button>
+      <span id="keysMsg" class="msg"></span>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label class="f" style="flex:1">Broadcast address
+        <input id="bcast" class="field" placeholder="(auto)">
+      </label>
+      <button class="ghost" id="btnScan" style="align-self:flex-end">Scan network</button>
+    </div>
+    <div id="scanMsg" class="msg"></div>
+  </div>
+
+  <div class="card">
+    <h2>Boards</h2>
+    <div id="boards" class="boards"><span class="msg">Run a scan to list boards.</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Driver config &amp; source</h2>
+    <div class="grid">
+      <label class="f">Preset
+        <select id="preset" class="field"></select>
+      </label>
+      <label class="f">Run label
+        <input id="label" class="field" placeholder="Hibrido 20%">
+      </label>
+      <label class="f">Dimming mode
+        <select id="mode" class="field">
+          <option value="0">PWM</option>
+          <option value="1">Analog</option>
+          <option value="2" selected>Hybrid</option>
+        </select>
+      </label>
+      <label class="f">PWM freq (Hz)
+        <input id="pwmFreq" class="field" type="number" value="2000">
+      </label>
+      <label class="f">Analog freq (Hz)
+        <input id="analogFreq" class="field" type="number" value="60000">
+      </label>
+      <label class="f">Min on-time (us)
+        <input id="minOn" class="field" type="number" value="20">
+      </label>
+      <label class="f">Crossover (%)
+        <input id="crossover" class="field" type="number" value="20">
+      </label>
+      <label class="cb"><input id="lin" type="checkbox" checked> Linearization on</label>
+      <label class="f">Bus voltage (V, series)
+        <input id="busV" class="field" type="number" value="52" step="0.1">
+      </label>
+      <label class="f">Per-rail current limit (A)
+        <input id="ilim" class="field" type="number" value="1.0" step="0.05">
+      </label>
+      <label class="cb"><input id="srcOff" type="checkbox" checked> Turn source off when done</label>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Sweep</h2>
+    <div class="grid">
+      <label class="f" style="grid-column:1/-1">Dim levels (%, comma-separated)
+        <input id="levels" class="field" value="0,1,5,10,20,30,40,50,60,70,80,90,100">
+      </label>
+      <label class="f">Settle time (s)
+        <input id="settle" class="field" type="number" value="1.0" step="0.1">
+      </label>
+      <label class="f">Samples per point
+        <input id="samples" class="field" type="number" value="10">
+      </label>
+      <label class="f">Sample interval (s)
+        <input id="interval" class="field" type="number" value="0.2" step="0.05">
+      </label>
+      <label class="f">Power-up timeout (s)
+        <input id="powTimeout" class="field" type="number" value="20">
+      </label>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Run</h2>
+    <div class="row">
+      <button id="btnRun">Play &#9654;</button>
+      <button class="danger" id="btnStop" disabled>Stop</button>
+      <button class="ghost" id="btnCsv" disabled>Download CSV</button>
+      <span id="runState" class="pill">idle</span>
+    </div>
+    <div style="margin-top:10px">
+      <progress id="prog" value="0" max="1"></progress>
+      <div id="progText" class="msg"></div>
+    </div>
+    <div id="runMsg" class="msg"></div>
+  </div>
+
+  <div class="card">
+    <h2>Results</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th>Board</th><th>Label</th><th>Mode</th><th>Lin</th><th>Dim %</th>
+          <th>Fonte 1 (W)</th><th>Fonte 2 (W)</th><th>Total (W)</th>
+        </tr></thead>
+        <tbody id="rows"><tr><td colspan="8" class="msg">No data yet.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Log</h2>
+    <pre class="log" id="log">&mdash;</pre>
+  </div>
+
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const api = async (url, opts) => {
+  const r = await fetch(url, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.message || j.detail || j.error || `HTTP ${r.status}`);
+  return j;
+};
+
+let PRESETS = {};
+let selectedBoards = new Set();
+let poll = null;
+
+async function loadPresets() {
+  const j = await api('/api/presets');
+  PRESETS = j.presets || {};
+  const sel = $('preset');
+  sel.innerHTML = '<option value="">(custom)</option>' +
+    Object.keys(PRESETS).map(k => `<option>${k}</option>`).join('');
+}
+$('preset').addEventListener('change', () => {
+  const p = PRESETS[$('preset').value];
+  if (!p) return;
+  $('mode').value = p.mode;
+  $('pwmFreq').value = p.pwm_freq_hz;
+  $('analogFreq').value = p.analog_freq_hz;
+  $('minOn').value = p.min_on_time_us;
+  $('crossover').value = p.crossover_pct;
+  if (!$('label').value) $('label').value = $('preset').value;
+});
+
+$('btnPsu').addEventListener('click', async () => {
+  const m = $('psuMsg'); m.className = 'msg'; m.textContent = 'testing...';
+  try {
+    const q = new URLSearchParams({ host: $('psuHost').value, port: $('psuPort').value, fake: $('fake').checked });
+    const j = await api('/api/psu?' + q);
+    m.className = 'msg ok'; m.textContent = j.idn;
+  } catch (e) { m.className = 'msg err'; m.textContent = e.message; }
+});
+
+$('btnKeys').addEventListener('click', async () => {
+  const f = $('keysFile').files[0];
+  const m = $('keysMsg');
+  if (!f) { m.className = 'msg err'; m.textContent = 'pick a file first'; return; }
+  const fd = new FormData(); fd.append('file', f);
+  try {
+    const j = await api('/api/keys', { method: 'POST', body: fd });
+    m.className = 'msg ok'; m.textContent = `loaded: ${j.count} keys, ${j.fallback_count} fallback`;
+  } catch (e) { m.className = 'msg err'; m.textContent = e.message; }
+});
+$('btnKeysClear').addEventListener('click', async () => {
+  await api('/api/keys/clear', { method: 'POST' });
+  $('keysMsg').className = 'msg'; $('keysMsg').textContent = 'cleared';
+});
+
+$('btnScan').addEventListener('click', async () => {
+  const m = $('scanMsg'); m.className = 'msg'; m.textContent = 'scanning...';
+  try {
+    const q = $('bcast').value ? '?broadcast=' + encodeURIComponent($('bcast').value) : '';
+    const j = await api('/api/scan' + q);
+    m.className = 'msg'; m.textContent = `${j.devices.length} board(s) via ${j.broadcast}` +
+      (j.keys.loaded ? '' : '  —  no keys file loaded');
+    renderBoards(j.devices);
+  } catch (e) { m.className = 'msg err'; m.textContent = e.message; }
+});
+
+function renderBoards(devs) {
+  const box = $('boards');
+  if (!devs.length) { box.innerHTML = '<span class="msg">No boards answered.</span>'; return; }
+  box.innerHTML = '';
+  devs.forEach(d => {
+    const el = document.createElement('label');
+    el.className = 'board';
+    el.innerHTML = `<input type="checkbox" data-ip="${d.ip}" ${selectedBoards.has(d.ip) ? 'checked' : ''}>
+      <span class="mono">${d.serial}</span>
+      <span class="sp"></span>
+      <span class="mono">${d.ip}</span>
+      <span class="pill ${d.poe_ready ? 'on' : ''}">${d.poe_source}</span>
+      <span class="pill">fw ${d.fw_version}</span>`;
+    el.querySelector('input').addEventListener('change', (e) => {
+      if (e.target.checked) selectedBoards.add(d.ip); else selectedBoards.delete(d.ip);
+    });
+    box.appendChild(el);
+  });
+}
+
+function buildRequest() {
+  return {
+    boards: [...selectedBoards],
+    psu_host: $('psuHost').value.trim(),
+    psu_port: parseInt($('psuPort').value, 10),
+    bus_voltage: parseFloat($('busV').value),
+    current_limit_a: parseFloat($('ilim').value),
+    source_off_when_done: $('srcOff').checked,
+    label: $('label').value.trim(),
+    mode: parseInt($('mode').value, 10),
+    pwm_freq_hz: parseInt($('pwmFreq').value, 10),
+    analog_freq_hz: parseInt($('analogFreq').value, 10),
+    min_on_time_us: parseInt($('minOn').value, 10),
+    crossover_pct: parseInt($('crossover').value, 10),
+    lin_enable: $('lin').checked,
+    levels: $('levels').value.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !Number.isNaN(n)),
+    settle_s: parseFloat($('settle').value),
+    samples: parseInt($('samples').value, 10),
+    sample_interval_s: parseFloat($('interval').value),
+    power_timeout_s: parseFloat($('powTimeout').value),
+    fake: $('fake').checked,
+  };
+}
+
+$('btnRun').addEventListener('click', async () => {
+  const m = $('runMsg'); m.className = 'msg'; m.textContent = 'starting...';
+  try {
+    const j = await api('/api/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildRequest()),
+    });
+    m.className = 'msg ok'; m.textContent = 'running: ' + j.boards.join(', ');
+    startPolling();
+  } catch (e) { m.className = 'msg err'; m.textContent = e.message; }
+});
+$('btnStop').addEventListener('click', () => api('/api/run/stop', { method: 'POST' }));
+$('btnCsv').addEventListener('click', () => { window.location = '/api/run/csv'; });
+
+function startPolling() { if (!poll) poll = setInterval(refresh, 1000); refresh(); }
+
+async function refresh() {
+  let s;
+  try { s = await api('/api/run/status'); } catch { return; }
+  const running = s.state === 'running';
+  $('runState').textContent = s.state;
+  $('runState').className = 'pill' + (running ? ' on' : '');
+  $('btnRun').disabled = running;
+  $('btnStop').disabled = !running;
+  $('btnCsv').disabled = !s.csv_path;
+  $('prog').max = s.total_points || 1;
+  $('prog').value = s.done_points || 0;
+  const cur = s.current || {};
+  $('progText').textContent = s.total_points
+    ? `${s.done_points}/${s.total_points}` + (cur.board ? `  —  ${cur.board} @ ${cur.dimming_pct}%` : '')
+    : '';
+  if (s.error) { $('runMsg').className = 'msg err'; $('runMsg').textContent = s.error; }
+  renderRows(s.rows || []);
+  $('log').textContent = (s.log || []).join('\n') || '—';
+  $('log').scrollTop = $('log').scrollHeight;
+  if (!running && poll) { clearInterval(poll); poll = null; }
+}
+
+function renderRows(rows) {
+  const tb = $('rows');
+  if (!rows.length) { tb.innerHTML = '<tr><td colspan="8" class="msg">No data yet.</td></tr>'; return; }
+  tb.innerHTML = rows.map(r => `<tr>
+    <td class="mono">${r.board_serial}</td>
+    <td>${r.label || ''}</td>
+    <td>${r.mode_name}</td>
+    <td>${r.lin_enable ? 'on' : 'off'}</td>
+    <td>${r.dimming_pct}</td>
+    <td>${r.f1_w.toFixed(3)}</td>
+    <td>${r.f2_w.toFixed(3)}</td>
+    <td>${r.total_w.toFixed(3)}</td>
+  </tr>`).join('');
+}
+
+loadPresets();
+refresh();
+</script>
+</body>
+</html>
