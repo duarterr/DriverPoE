@@ -1,0 +1,13 @@
+# Sweep bench UI + harness. Install from inside tests/:
+#   pip install -r requirements.txt
+#
+# The device_api package under ../tools/ is imported directly (path shim in
+# harness.py / server.py) -- not installed. Its only third-party need is:
+cryptography>=42
+
+# Web UI backend.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9   # keys-file upload (multipart/form-data)
+
+# Optional: nicer broadcast-address guess is stdlib-only, so nothing else.
