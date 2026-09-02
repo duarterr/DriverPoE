@@ -25,6 +25,18 @@
  *
  * All levels/fractions are unsigned Q16 (HV9910_Q_ONE == 1.0).
  *
+ * --- Output-power linearization (the `linearize` flag) ---
+ * The LD reference -> LED power transfer on this board is far from linear:
+ * the HV9910 buck is discontinuous over most of the range (power ~ drive^2.5
+ * -- "50%" gives ~16% power) and goes continuous near full drive. When
+ * `linearize` is set, hv9910_curve_eval pre-distorts the LD duty by the
+ * measured inverse (see hv9910_curve.c for the derivation):
+ *   drive(L) = min( 1.0758 * L^0.4 ,  0.875 + 0.125*L )
+ * applied to ld_duty_q only, so PWM mode (ld_duty_q == Q_ONE) is untouched
+ * -- it has no analog path -- and the HYBRID knee stays continuous (see
+ * below): both branches still reduce to light output ~ commanded level, now
+ * in *physical* units, not just in Q16 duty. Round-trips within ~1.5 pp.
+ *
  * --- HYBRID continuity (why there is no visible step at the crossover) ---
  * Light output is proportional to  Phi = ld_duty_q * pwmd_duty_q / Q_ONE
  * (assuming LD -> current is linear, which holds above the ~10 % floor the
@@ -106,10 +118,13 @@ typedef struct {
  * @param crossover_q HYBRID knee, 0..HV9910_Q_ONE (clamped to [1, Q_ONE]).
  * @param min_on_frac_q PWMD burst floor as a fraction, 0..HV9910_Q_ONE
  *        (0 disables the snap).
+ * @param linearize true to pre-distort the LD duty so LED power tracks
+ *        level_q (see the linearization note above); no effect in PWM mode.
  * @return Duties and the lit/dark decision.
  */
 hv9910_curve_out_t hv9910_curve_eval(uint8_t mode, uint32_t level_q,
-                                     uint32_t crossover_q, uint32_t min_on_frac_q);
+                                     uint32_t crossover_q, uint32_t min_on_frac_q,
+                                     bool linearize);
 
 #ifdef __cplusplus
 }

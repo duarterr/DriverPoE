@@ -221,6 +221,7 @@ class TestInfoPayload(unittest.TestCase):
             power_state=2,
             power_effective_scale_pct=51,
             power_budget_cw=1295,
+            lin_enable=1,
         )
         fields.update(overrides)
         buf = bytearray()
@@ -259,7 +260,8 @@ class TestInfoPayload(unittest.TestCase):
         buf.append(fields["power_state"])
         buf.append(fields["power_effective_scale_pct"])
         buf += struct.pack(">H", fields["power_budget_cw"])
-        buf += b"\x00" * 7   # reserved
+        buf.append(fields["lin_enable"])
+        buf += b"\x00" * 6   # reserved
         return bytes(buf)
 
     def test_parses_all_fields(self):
@@ -300,6 +302,7 @@ class TestInfoPayload(unittest.TestCase):
         self.assertEqual(parsed["power_state_name"], "capped")
         self.assertEqual(parsed["power_effective_scale_pct"], 51)
         self.assertEqual(parsed["power_budget_w"], 12.95)
+        self.assertIs(parsed["lin_enable"], True)
 
     def test_wrong_size_rejected(self):
         with self.assertRaises(ProtocolError):
@@ -351,15 +354,15 @@ class TestDmxConfig(unittest.TestCase):
 
 
 class TestDriverConfig(unittest.TestCase):
-    def test_round_trip_v2(self):
+    def test_round_trip_v3(self):
         cfg = DriverConfig(
             mode=1, pwm_freq_hz=3000, analog_freq_hz=50000,
             min_on_time_us=15, crossover_pct=30,
-            power_mode=2, poe_cap_pct=60,
+            power_mode=2, poe_cap_pct=60, lin_enable=0,
         )
         blob = pack_driver_config(cfg)
         self.assertEqual(len(blob), DRV_CFG_WIRE_SIZE)
-        self.assertEqual(blob[0], 2)  # layout version
+        self.assertEqual(blob[0], 3)  # layout version
         self.assertEqual(parse_driver_config(blob), cfg)
 
     def test_defaults_pack(self):
@@ -367,6 +370,7 @@ class TestDriverConfig(unittest.TestCase):
         self.assertEqual(parse_driver_config(blob), DriverConfig())
         self.assertEqual(DriverConfig().power_mode, 0)
         self.assertEqual(DriverConfig().poe_cap_pct, 51)
+        self.assertEqual(DriverConfig().lin_enable, 1)
 
     def test_accepts_legacy_v1_blob(self):
         v1 = struct.pack(">BBHIHB", 1, 2, 2000, 60000, 20, 20)   # 11 bytes, no power fields
@@ -376,10 +380,19 @@ class TestDriverConfig(unittest.TestCase):
         self.assertEqual(cfg.crossover_pct, 20)
         self.assertEqual(cfg.power_mode, 0)     # defaulted
         self.assertEqual(cfg.poe_cap_pct, 51)   # defaulted
+        self.assertEqual(cfg.lin_enable, 1)     # defaulted
+
+    def test_accepts_legacy_v2_blob(self):
+        v2 = struct.pack(">BBHIHBBB", 2, 0, 2000, 60000, 20, 20, 1, 40)  # 13 bytes, no linearization
+        self.assertEqual(len(v2), 13)
+        cfg = parse_driver_config(v2)
+        self.assertEqual(cfg.power_mode, 1)
+        self.assertEqual(cfg.poe_cap_pct, 40)
+        self.assertEqual(cfg.lin_enable, 1)     # defaulted
 
     def test_wrong_size_rejected(self):
         with self.assertRaises(ProtocolError):
-            parse_driver_config(b"\x02" * 10)
+            parse_driver_config(b"\x03" * 10)
 
 
 if __name__ == "__main__":

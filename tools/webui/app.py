@@ -138,6 +138,7 @@ def _device_to_dict(info: DeviceInfo) -> dict[str, Any]:
         "power_state_name": info.power_state_name,
         "power_effective_scale_pct": info.power_effective_scale_pct,
         "power_budget_w": info.power_budget_w,
+        "lin_enable": info.lin_enable,
     }
 
 
@@ -172,6 +173,7 @@ def _driver_to_dict(cfg: DriverConfig) -> dict[str, Any]:
         "power_mode": cfg.power_mode,
         "power_mode_name": POWER_MODE_NAMES.get(cfg.power_mode, str(cfg.power_mode)),
         "poe_cap_pct": cfg.poe_cap_pct,
+        "lin_enable": cfg.lin_enable,
     }
 
 
@@ -295,6 +297,7 @@ class DriverConfigRequest(BaseModel):
     crossover_pct: int = 20
     power_mode: int = 0          # 0 auto, 1 poe_only, 2 poe_plus_required
     poe_cap_pct: int = 51
+    lin_enable: bool = True
     secret_hex: str | None = None
 
 
@@ -596,6 +599,7 @@ def api_driver_set(ip: str, body: DriverConfigRequest, port: int = DEFAULT_PORT)
         crossover_pct=body.crossover_pct,
         power_mode=body.power_mode,
         poe_cap_pct=body.poe_cap_pct,
+        lin_enable=1 if body.lin_enable else 0,
     )
     try:
         with AdminClient(ip, port, DEFAULT_TIMEOUT) as client:

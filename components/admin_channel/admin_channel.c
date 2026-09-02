@@ -468,14 +468,16 @@ static void handle_info(int sock, const parsed_header_t *hdr, const struct socka
     /* --- Power block: 13 bytes appended after the dimming block (payload =
      * 84). power_mode + poe_cap_pct mirror the driver-config fields;
      * power_state / effective_scale_pct / budget_cw are the live result of
-     * the policy engine. The 7 trailing reserved bytes give room for future
-     * power fields without another coordinated INFO size bump. --- */
+     * the policy engine. lin_enable is a driver-config field parked in the
+     * first reserved slot (it belongs with the dimming block, which is full);
+     * 6 reserved bytes remain for future fields, no INFO size bump. --- */
     payload[off++] = drv.power_mode;
     payload[off++] = drv.poe_cap_pct;
     payload[off++] = (uint8_t)power_manager_get_state();
     payload[off++] = power_manager_effective_scale_pct();
     put_u16_be(payload + off, power_manager_budget_cw()); off += 2;
-    memset(payload + off, 0, 7); off += 7;   /* reserved */
+    payload[off++] = drv.lin_enable;
+    memset(payload + off, 0, 6); off += 6;   /* reserved */
 
     send_packet(sock, src, ADMIN_TYPE_INFO_RESP, NULL, payload, (uint16_t)off, NULL);
 }

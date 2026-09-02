@@ -21,14 +21,15 @@
 extern "C" {
 #endif
 
-/** Layout v2: [0]=version [1]=mode [2..4)=pwm_freq_hz(u16) [4..8)=analog_freq_hz(u32)
+/** Layout v3: [0]=version [1]=mode [2..4)=pwm_freq_hz(u16) [4..8)=analog_freq_hz(u32)
  *             [8..10)=min_on_time_us(u16) [10]=crossover_pct
- *             [11]=power_mode [12]=poe_cap_pct
- * Layout v1 (11 bytes, no power fields) is still accepted on read -- see
- * driver_config_unpack(). */
-#define DRV_CFG_WIRE_SIZE      13
+ *             [11]=power_mode [12]=poe_cap_pct [13]=lin_enable
+ * Layout v1 (11 bytes, no power fields) and v2 (13 bytes, no linearization)
+ * are still accepted on read -- see driver_config_unpack(). */
+#define DRV_CFG_WIRE_SIZE      14
 #define DRV_CFG_WIRE_SIZE_V1   11
-#define DRV_CFG_LAYOUT_VERSION 2
+#define DRV_CFG_WIRE_SIZE_V2   13
+#define DRV_CFG_LAYOUT_VERSION 3
 
 /** @brief Power policy: how the negotiated PoE class maps to LED output.
  * "full-power-capable" = Type-2 (PoE+) or AUX bench supply. */
@@ -46,7 +47,10 @@ typedef struct {
     uint16_t min_on_time_us; /**< PWMD minimum conduction burst, 2..200. */
     uint8_t  crossover_pct;  /**< HYBRID knee, 10..60. */
     uint8_t  power_mode;     /**< driver_power_mode_t, 0..2. */
-    uint8_t  poe_cap_pct;    /**< LD-reference scale under the Type-1 cap, 10..100 (default 51 = 12.95/25.5). */
+    uint8_t  poe_cap_pct;    /**< Type-1 power cap, 10..100 (default 51 = 12.95/25.5). See lin_enable. */
+    uint8_t  lin_enable;     /**< 0/1 (default 1). When set, pre-distorts the LD (analog) drive so measured
+                                  power tracks the commanded level -- affects ANALOG and HYBRID (PWM has no
+                                  analog path); also makes poe_cap_pct an honest "% of max power". */
 } driver_config_t;
 
 /**

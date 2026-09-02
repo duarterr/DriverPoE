@@ -55,6 +55,7 @@ class DeviceInfo:
     power_state_name: str
     power_effective_scale_pct: int   # LD scale currently applied (100 or the cap)
     power_budget_w: float            # negotiated PoE budget: 0 / 12.95 / 25.5
+    lin_enable: bool                 # linearize the LD (analog) output-power transfer
 
     @property
     def mac_str(self) -> str:

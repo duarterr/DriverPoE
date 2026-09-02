@@ -141,6 +141,8 @@ The HV9910 has two dimming inputs wired on this board: **LD** (linear dimming �
 
 Reaching level 0 in any mode drives PWMD to 0. There is no fade engine — every level change is instantaneous; smoothing comes from the DMX layer or a lighting console.
 
+**Output-power linearization** (`lin_enable`, default on): the LD reference → LED power transfer on this board is far from linear — the HV9910 buck is discontinuous over most of the range (`power ≈ drive^2.5`, so "50 %" produces ~16 % of full power) and goes continuous near full drive. When enabled, `hv9910_curve.c` pre-distorts the LD duty by the measured inverse `drive(L) = min(1.0758·L^0.4, 0.875 + 0.125·L)` (DCM branch ∥ CCM branch — derivation in the file). It touches the LD duty only, so it affects **Analog** and **Hybrid** (PWM has no analog path) and the Hybrid knee stays continuous — those modes then track commanded power within ~1.5 pp. It also makes `poe_cap_pct` an honest "% of max power".
+
 ### Power policy (PoE vs PoE+)
 
 `components/power_manager/` maps the power class (`tps2378`, from the T2P selector: Type-1 12.95 W when clear, Type-2/AUX 25.5 W when set) and a configured **power mode** to the HV9910 output:
@@ -151,9 +153,9 @@ Reaching level 0 in any mode drives PWMD to 0. There is no fade engine — every
 | **PoE only** | capped to `poe_cap_pct` (AUX: full) | capped to `poe_cap_pct` |
 | **PoE+ required** | full output | LED held off, blue LED blinks (like the no-power low-power state); `ON`/`DIM` answer `ACCEPTED_PENDING` and light once a Type-2 source appears |
 
-The cap is a scale on the **LD current reference only** — PWMD keeps its full range, so the user-facing 0–100 scale (DMX, admin, webui) is unchanged; only the peak LED current is reduced. `power_manager` re-evaluates on every power/source transition and after `DRIVER_SET_CONFIG`, so a live PoE→PoE+ renegotiation or a mode change takes effect without a reboot.
+The cap scales the **commanded level** before the dimming curve, so with linearization on it is a true "% of max power"; PWMD keeps its full range and the user-facing 0–100 scale (DMX, admin, webui) is unchanged. `power_manager` re-evaluates on every power/source transition and after `DRIVER_SET_CONFIG`, so a live PoE→PoE+ renegotiation or a mode change takes effect without a reboot.
 
-Config (dimming mode, the two frequencies, `min_on_time_us`, `crossover_pct`, **`power_mode`, `poe_cap_pct`**) lives in NVS namespace `"driver"` (`components/driver_config/`, blob layout v2 — the v1 layout without the power fields is still read and forward-migrated). The current values and the live power state ride along in the unauthenticated `INFO` block for display; changing them goes over the authenticated admin channel (`DRIVER_GET_CONFIG` / `DRIVER_SET_CONFIG`, opcodes `0x10`/`0x11` — additive, no protocol-version change) via the **"Device settings"** card in `tools/webui/`. `FACTORY_RESET` clears it back to the defaults (HYBRID dimming, Auto power mode).
+Config (dimming mode, the two frequencies, `min_on_time_us`, `crossover_pct`, **`power_mode`, `poe_cap_pct`, `lin_enable`**) lives in NVS namespace `"driver"` (`components/driver_config/`, blob layout v3 — the v1 layout without the power fields and v2 without linearization are still read and forward-migrated). The current values and the live power state ride along in the unauthenticated `INFO` block for display; changing them goes over the authenticated admin channel (`DRIVER_GET_CONFIG` / `DRIVER_SET_CONFIG`, opcodes `0x10`/`0x11` — additive, no protocol-version change) via the **"Device settings"** card in `tools/webui/`. `FACTORY_RESET` clears it back to the defaults (HYBRID dimming, Auto power mode, linearization on).
 
 The ESP32 LEDC constraint `freq × 2^bits ≤ 80 MHz` sets the duty resolution per frequency (`pick_duty_res_bits()` in `hv9910.c`): the analog carrier gets 10 bits at 40–60 kHz, 9 bits at 80 kHz; the PWMD carrier gets 13–14 bits at 1–5 kHz. The curve normalises everything to Q16 so the resolution choice is transparent to the math.
 
