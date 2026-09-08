@@ -64,7 +64,7 @@ class DeviceInfo:
     @property
     def power_blocking_reason(self) -> str | None:
         """None if power is ready; otherwise why the LED still won't light.
-        Ready is gated on VBUS alone (see components/tps2378/tps2378.c) --
+        Ready is gated on VBUS alone (see firmware/components/tps2378/tps2378.c) --
         CDB is the hotswap inrush flag and T2P is the Type-1/Type-2 class
         selector, neither gates readiness."""
         if self.poe_ready:

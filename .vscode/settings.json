@@ -28,11 +28,12 @@
   "idf.customExtraVars": {
     "IDF_TARGET": "esp32"
   },
+  "idf.buildPath": "${workspaceFolder}/firmware/build",
   "clangd.path": "C:\\Espressif\\tools\\esp-clang\\esp-20.1.1_20250829\\esp-clang\\bin\\clangd.exe",
   "clangd.arguments": [
     "--background-index",
     "--query-driver=**",
-    "--compile-commands-dir=d:\\Git\\PoE\\blink\\build"
+    "--compile-commands-dir=${workspaceFolder}/firmware/build"
   ],
   "idf.flashType": "UART"
 }

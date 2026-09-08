@@ -21,7 +21,7 @@ from typing import Protocol
 
 from .protocol import SECRET_LEN
 
-# MUST match ADMIN_DEFAULT_SECRET in main/poe_luminaire_main.h exactly --
+# MUST match ADMIN_DEFAULT_SECRET in firmware/main/poe_luminaire_main.h exactly --
 # same 32 ASCII bytes, spelled out there as hex only so the array's exact
 # length is unambiguous at a glance. Documented in the clear on purpose
 # (same as a home router's printed default password) -- it's a known

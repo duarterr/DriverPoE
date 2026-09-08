@@ -5,7 +5,7 @@ each fixture is commissioned once in the admin UI (universe + DMX start
 address + personality), and from then on this sender streams ArtDmx to
 them like any lighting console -- no HMAC, no per-command nonce, no rate
 limit. That's exactly what the firmware's DMX input layer
-(components/dmx_input/) is for.
+(firmware/components/dmx_input/) is for.
 
 One background thread transmits every patched universe at a fixed rate,
 whether or not anything changed, so the fixtures always see a live source

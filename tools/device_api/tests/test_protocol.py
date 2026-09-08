@@ -129,7 +129,7 @@ class TestPacket(unittest.TestCase):
 
 class TestPacketTypes(unittest.TestCase):
     def test_change_secret_type_values(self):
-        # Must stay in sync with components/admin_channel/admin_protocol.h's admin_pkt_type_t.
+        # Must stay in sync with firmware/components/admin_channel/admin_protocol.h's admin_pkt_type_t.
         self.assertEqual(PacketType.CHANGE_SECRET, 0x09)
         self.assertEqual(PacketType.CHANGE_SECRET_RESP, 0x89)
 

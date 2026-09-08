@@ -36,7 +36,7 @@ sdkconfig
 
 # ESP-IDF dependencies
 # For older versions or manual component management
-/components/.idf/
+/firmware/components/.idf/
 **/components/.idf/
 # For modern ESP-IDF component manager
 managed_components/
@@ -67,6 +67,9 @@ env/
 .clangd/
 .ccls-cache/
 compile_commands.json
+
+# Claude Code session state
+.claude/
 
 # Windows specific
 Thumbs.db

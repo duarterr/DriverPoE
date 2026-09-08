@@ -1,6 +1,6 @@
 """Wire protocol: constants, packet (de)serialization, device identity
-helpers. Must match components/admin_channel/admin_protocol.h and
-components/devid/devid.c exactly -- see the comments below for which C
+helpers. Must match firmware/components/admin_channel/admin_protocol.h and
+firmware/components/devid/devid.c exactly -- see the comments below for which C
 side each piece mirrors.
 
 Pure and I/O-free on purpose (no sockets, no files, no print()/input()) --
@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 
 # --------------------------------------------------------------------- #
-# Identity constants -- must match components/devid/devid.h exactly.
+# Identity constants -- must match firmware/components/devid/devid.h exactly.
 # --------------------------------------------------------------------- #
 MODEL_PREFIX = "DriverPoE"
 SECRET_LEN = 32
@@ -24,7 +24,7 @@ MAC_LEN = 6
 
 # --------------------------------------------------------------------- #
 # Admin channel wire format -- must match
-# components/admin_channel/admin_protocol.h exactly.
+# firmware/components/admin_channel/admin_protocol.h exactly.
 # --------------------------------------------------------------------- #
 MAGIC = 0x44504F45  # "DPOE"
 # Must match ADMIN_PROTO_VERSION in admin_protocol.h. A response with any
@@ -54,7 +54,7 @@ ZERO_NONCE = b"\x00" * NONCE_LEN
 INFO_RESP_PAYLOAD_SIZE = 84       # 47 core + 16 DMX status + 8 dimming-mode + 13 power
 
 # DMX layer config wire format -- must match DMX_CFG_WIRE_SIZE /
-# dmx_config_pack() in components/dmx_input/include/dmx_input.h. 18 bytes:
+# dmx_config_pack() in firmware/components/dmx_input/include/dmx_input.h. 18 bytes:
 # 1 layout-version byte + 17 payload bytes, multi-byte fields big-endian.
 DMX_CFG_WIRE_SIZE = 18
 DMX_CFG_LAYOUT_VERSION = 1
@@ -68,7 +68,7 @@ DMX_LOSS_NAMES = {0: "hold", 1: "to-black", 2: "to-level"}
 DMX_SOURCE_NAMES = {0: "none", 1: "artnet", 2: "sacn", 3: "both"}
 
 # HV9910 dimming + power config wire format -- must match DRV_CFG_WIRE_SIZE /
-# driver_config_pack() in components/driver_config/include/driver_config.h.
+# driver_config_pack() in firmware/components/driver_config/include/driver_config.h.
 # v3, 14 bytes: [0]=layout [1]=mode [2:4]=pwm_freq_hz(u16) [4:8]=analog_freq_hz(u32)
 # [8:10]=min_on_time_us(u16) [10]=crossover_pct [11]=power_mode [12]=poe_cap_pct
 # [13]=lin_enable, multi-byte fields big-endian. The v1 (11 B, no power
@@ -80,7 +80,7 @@ DRV_CFG_LAYOUT_VERSION = 3
 
 DRIVER_MODE_NAMES = {0: "pwm", 1: "analog", 2: "hybrid"}
 
-# driver_config.power_mode / power_manager state (see components/power_manager/).
+# driver_config.power_mode / power_manager state (see firmware/components/power_manager/).
 POWER_MODE_NAMES = {0: "auto", 1: "poe_only", 2: "poe_plus_required"}
 POWER_STATE_NAMES = {0: "no_power", 1: "full", 2: "capped", 3: "blocked"}
 
@@ -255,7 +255,7 @@ def status_byte(payload: bytes) -> int:
 
 # ======================================================================= #
 # INFO_RESP payload -- must match handle_info() in
-# components/admin_channel/admin_channel.c exactly. 84 bytes:
+# firmware/components/admin_channel/admin_channel.c exactly. 84 bytes:
 # 47 core + 16 DMX status + 8 dimming-mode + 13 power (last 7 reserved).
 # ======================================================================= #
 _POE_SOURCE_NAMES = {0: "none", 1: "type1", 2: "type2", 3: "aux"}
@@ -350,7 +350,7 @@ def parse_info_payload(payload: bytes) -> dict:
 
 # ======================================================================= #
 # DMX layer config -- must match dmx_config_pack()/dmx_config_unpack() in
-# components/dmx_input/dmx_input.c exactly (DMX_CFG_WIRE_SIZE bytes,
+# firmware/components/dmx_input/dmx_input.c exactly (DMX_CFG_WIRE_SIZE bytes,
 # big-endian, leading layout-version byte).
 # ======================================================================= #
 @dataclass
@@ -432,7 +432,7 @@ def parse_dmx_config(payload: bytes) -> DmxConfig:
 
 # ======================================================================= #
 # HV9910 dimming config -- must match driver_config_pack()/_unpack() in
-# components/driver_config/driver_config.c exactly (DRV_CFG_WIRE_SIZE
+# firmware/components/driver_config/driver_config.c exactly (DRV_CFG_WIRE_SIZE
 # bytes, big-endian, leading layout-version byte).
 # ======================================================================= #
 @dataclass
