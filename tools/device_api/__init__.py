@@ -1,7 +1,7 @@
 """device_api -- Python API for the DriverPoE admin UDP channel.
 
-Pure library, no interactive I/O and no disk I/O: `cli.py`, `tools/webui/`,
-`tools/webui_demo/` and `tools/audit_admin.py` are thin consumers of it.
+Pure library, no interactive I/O and no disk I/O: `cli.py`, `tools/webui/`
+and `tools/webui_demo/` are thin consumers of it.
 See README.md "Administrative channel" for the wire protocol.
 
 Typical use::
