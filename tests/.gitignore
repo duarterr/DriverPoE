@@ -1,2 +1,5 @@
+# generated sweep results
 results/*.csv
+results/[0-9]*.xlsx
+~$*.xlsx
 __pycache__/
