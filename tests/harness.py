@@ -22,12 +22,11 @@ HTTP and the shared run state. It can also be run standalone -- see
 from __future__ import annotations
 
 import argparse
-import csv
 import statistics
 import sys
 import threading
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -53,6 +52,7 @@ from device_api import (  # noqa: E402
 from device_api.protocol import DRIVER_MODE_NAMES  # noqa: E402
 
 from psu_rigol import FakePSU, PSUError, RigolDP1308A  # noqa: E402
+from report import write_report  # noqa: E402
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
@@ -69,6 +69,28 @@ PRESETS: dict[str, dict[str, int]] = {
 # ======================================================================= #
 # Config
 # ======================================================================= #
+@dataclass
+class Combo:
+    """One point in a matrix run: a driver mode + linearization state,
+    applied on top of the base SweepConfig."""
+    label: str
+    mode: int
+    lin_enable: bool
+
+
+def build_matrix(
+    lin_values: tuple[bool, ...] = (False, True),
+    modes: tuple[int, ...] = (2, 1, 0),   # hybrid, analog, pwm
+) -> list[Combo]:
+    """The default sweep matrix: with/without linearization x each mode."""
+    out: list[Combo] = []
+    for lin in lin_values:
+        for mode in modes:
+            name = DRIVER_MODE_NAMES.get(mode, str(mode))
+            out.append(Combo(f"{name} lin-{'on' if lin else 'off'}", mode, lin))
+    return out
+
+
 @dataclass
 class BoardRef:
     ip: str
@@ -106,6 +128,16 @@ class SweepConfig:
 
     fake: bool = False             # use FakePSU + skip real board I/O errors softly
 
+    # Matrix: run the whole board sweep once per combo, in sequence. Empty
+    # -> a single pass with the fields above.
+    combos: list[Combo] = field(default_factory=list)
+    # Retry any failed PSU/board command this many times before giving up.
+    retries: int = 2
+
+    def with_combo(self, c: Combo) -> "SweepConfig":
+        return replace(self, mode=c.mode, lin_enable=c.lin_enable,
+                       label=c.label, combos=[])
+
     def driver_config(self) -> DriverConfig:
         return DriverConfig(
             mode=self.mode,
@@ -140,7 +172,7 @@ class Row:
     timestamp: str
 
 
-CSV_FIELDS = list(Row.__annotations__.keys())
+FLAT_FIELDS = list(Row.__annotations__.keys())
 
 
 # ======================================================================= #
@@ -154,6 +186,7 @@ class SweepRunner:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._retries: int = 2
         self.state: str = "idle"          # idle | running | done | stopped | error
         self.error: str | None = None
         self.log: list[str] = []
@@ -161,7 +194,7 @@ class SweepRunner:
         self.total_points: int = 0
         self.done_points: int = 0
         self.current: dict[str, Any] = {}
-        self.csv_path: str | None = None
+        self.report_path: str | None = None
         self.started_at: str | None = None
         self.config: dict[str, Any] | None = None
 
@@ -180,7 +213,7 @@ class SweepRunner:
                 "total_points": self.total_points,
                 "done_points": self.done_points,
                 "current": dict(self.current),
-                "csv_path": self.csv_path,
+                "report_path": self.report_path,
                 "started_at": self.started_at,
                 "config": self.config,
             }
@@ -197,10 +230,12 @@ class SweepRunner:
             self.error = None
             self.log = []
             self.rows = []
-            self.total_points = len(cfg.boards) * len(cfg.levels)
+            self.total_points = (
+                len(cfg.boards) * len(cfg.levels) * max(1, len(cfg.combos))
+            )
             self.done_points = 0
             self.current = {}
-            self.csv_path = None
+            self.report_path = None
             self.started_at = datetime.now().isoformat(timespec="seconds")
             self.config = {**asdict(cfg), "boards": [asdict(b) for b in cfg.boards]}
         self._thread = threading.Thread(target=self._run, args=(cfg, store), daemon=True)
@@ -222,25 +257,65 @@ class SweepRunner:
         with self._lock:
             self.current = kw
 
+    def _retry(self, what: str, fn: Callable[[], Any]) -> Any:
+        """Run `fn`, retrying transient PSU/board failures `cfg.retries`
+        times.  Only wrap idempotent operations (setpoints, dim levels,
+        measurements) -- never a bare toggle."""
+        tries = max(1, self._retries + 1)
+        for attempt in range(1, tries + 1):
+            try:
+                return fn()
+            except (PSUError, DriverPoEError, OSError) as e:
+                if attempt == tries or self._stop.is_set():
+                    raise
+                self._emit(
+                    f"  {what}: {type(e).__name__}: {e} "
+                    f"-- retry {attempt}/{tries - 1}"
+                )
+                time.sleep(min(1.5 * attempt, 5.0))
+
     def _run(self, cfg: SweepConfig, store) -> None:
+        self._retries = cfg.retries
         psu: Any = None
         try:
             psu = FakePSU() if cfg.fake else RigolDP1308A(cfg.psu_host, cfg.psu_port)
-            psu.connect()
+            self._retry("PSU connect", psu.connect)
             self._emit(f"PSU: {psu.idn()}")
 
-            self._emit(
-                f"Programming bus {cfg.bus_voltage:.1f} V "
-                f"(CH2/CH3 = {cfg.bus_voltage / 2:.2f} V, {cfg.current_limit_a:.2f} A limit)"
+            # Read the PSU state first; only reprogram what's off-target.
+            changed = self._retry(
+                "PSU setup_bus",
+                lambda: psu.setup_bus(cfg.bus_voltage, cfg.current_limit_a),
             )
-            psu.setup_bus(cfg.bus_voltage, cfg.current_limit_a)
-            psu.all_outputs(True)
-            self._emit("Source outputs ON")
+            if changed:
+                self._emit(
+                    f"Bus set to {cfg.bus_voltage:.1f} V "
+                    f"(reprogrammed {', '.join(changed)} @ "
+                    f"{cfg.bus_voltage / 2:.2f} V, {cfg.current_limit_a:.2f} A limit)"
+                )
+            else:
+                self._emit(
+                    f"Bus already at {cfg.bus_voltage:.1f} V "
+                    f"({cfg.bus_voltage / 2:.2f} V/rail) -- left as-is"
+                )
 
-            for board in cfg.boards:
+            # The board only answers on the network with the outputs ON.
+            if self._retry("PSU outputs ON", psu.ensure_bus_on):
+                self._emit("Source outputs switched ON")
+            else:
+                self._emit("Source outputs already ON")
+
+            combos = cfg.combos or [None]
+            for i, combo in enumerate(combos, 1):
                 if self._stop.is_set():
                     break
-                self._sweep_board(cfg, store, psu, board)
+                ccfg = cfg.with_combo(combo) if combo is not None else cfg
+                if combo is not None:
+                    self._emit(f"=== Combo {i}/{len(combos)}: {combo.label} ===")
+                for board in ccfg.boards:
+                    if self._stop.is_set():
+                        break
+                    self._sweep_board(ccfg, store, psu, board)
 
             if self._stop.is_set():
                 self.state = "stopped"
@@ -268,7 +343,7 @@ class SweepRunner:
                     psu.close()
                 except Exception:  # noqa: BLE001
                     pass
-            self._write_csv()
+            self._write_report()
 
     def _resolve_secret(self, client: AdminClient, serial: str, store) -> bytes:
         secret, _ = find_working_secret(client, serial, store)
@@ -280,16 +355,25 @@ class SweepRunner:
             self._sweep_board_fake(cfg, psu, board)
             return
         with AdminClient(board.ip) as client:
-            info = client.info()
+            info = self._retry("board info", client.info)
             serial = info.serial
-            secret = self._resolve_secret(client, serial, store)
+            secret = self._retry(
+                f"{serial}: auth",
+                lambda: self._resolve_secret(client, serial, store),
+            )
 
             # 1. apply driver config
             cfgblob = cfg.driver_config()
-            res = client.set_driver_config(secret, serial, cfgblob)
+            res = self._retry(
+                f"{serial}: set driver config",
+                lambda: client.set_driver_config(secret, serial, cfgblob),
+            )
             if not res.accepted:
                 raise DriverPoEError(f"{serial}: DRIVER_SET_CONFIG refused ({res.status.name})")
-            applied = client.get_driver_config(secret, serial)
+            applied = self._retry(
+                f"{serial}: get driver config",
+                lambda: client.get_driver_config(secret, serial),
+            )
             self._emit(
                 f"{serial}: mode={DRIVER_MODE_NAMES.get(applied.mode, applied.mode)} "
                 f"pwm={applied.pwm_freq_hz}Hz analog={applied.analog_freq_hz}Hz "
@@ -300,7 +384,7 @@ class SweepRunner:
             # 2. wait for PoE power, then ON
             deadline = time.monotonic() + cfg.power_timeout_s
             while True:
-                info = client.info()
+                info = self._retry("board info", client.info)
                 if info.poe_ready or info.power_budget_w > 0:
                     break
                 if time.monotonic() > deadline:
@@ -312,14 +396,17 @@ class SweepRunner:
                     return
                 time.sleep(0.5)
             self._emit(f"{serial}: powered ({info.power_budget_w:.2f} W budget, {info.poe_source})")
-            client.on(secret, serial, ramp_ms=0)
+            self._retry(f"{serial}: on", lambda: client.on(secret, serial, ramp_ms=0))
 
             # 3. sweep
             mode_name = DRIVER_MODE_NAMES.get(applied.mode, str(applied.mode))
             for pct in cfg.levels:
                 if self._stop.is_set():
                     break
-                client.dim(secret, serial, pct, ramp_ms=0)
+                self._retry(
+                    f"{serial}: dim {pct}%",
+                    lambda p=pct: client.dim(secret, serial, p, ramp_ms=0),
+                )
                 self._set_current(board=serial, dimming_pct=pct,
                                   done=self.done_points, total=self.total_points)
                 time.sleep(cfg.settle_s)
@@ -364,8 +451,8 @@ class SweepRunner:
         f1_v = f1_a = f2_v = f2_a = 0.0
         n = max(1, cfg.samples)
         for k in range(n):
-            m2 = psu.measure("CH2")
-            m3 = psu.measure("CH3")
+            m2 = self._retry("measure CH2", lambda: psu.measure("CH2"))
+            m3 = self._retry("measure CH3", lambda: psu.measure("CH3"))
             f1_p.append(m2.power)
             f2_p.append(m3.power)
             f1_v, f1_a = m2.voltage, m2.current
@@ -384,21 +471,22 @@ class SweepRunner:
             samples=n, timestamp=datetime.now().isoformat(timespec="seconds"),
         )
 
-    def _write_csv(self) -> None:
+    def _write_report(self) -> None:
         if not self.rows:
             return
         RESULTS_DIR.mkdir(exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         label = (self.config or {}).get("label") or "sweep"
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in label)[:40]
-        path = RESULTS_DIR / f"{stamp}_{safe}.csv"
-        with path.open("w", newline="", encoding="utf-8") as fh:
-            w = csv.DictWriter(fh, fieldnames=CSV_FIELDS)
-            w.writeheader()
-            w.writerows(self.rows)
+        path = RESULTS_DIR / f"{stamp}_{safe}.xlsx"
+        try:
+            write_report(self.rows, path, flat_fields=FLAT_FIELDS)
+        except Exception as e:  # noqa: BLE001
+            self._emit(f"warning: could not write .xlsx report ({e})")
+            return
         with self._lock:
-            self.csv_path = str(path)
-        self._emit(f"CSV written: {path.name}")
+            self.report_path = str(path)
+        self._emit(f"Excel written: {path.name}")
 
 
 # ======================================================================= #
@@ -419,6 +507,12 @@ def _cli() -> None:
     ap.add_argument("--settle", type=float, default=1.0)
     ap.add_argument("--samples", type=int, default=10)
     ap.add_argument("--interval", type=float, default=0.2)
+    ap.add_argument("--retries", type=int, default=2,
+                    help="retry a failed PSU/board command N times")
+    ap.add_argument("--matrix", action="store_true",
+                    help="run the full matrix in sequence: "
+                         "with/without linearization x each PWM mode "
+                         "(overrides --preset mode / --lin)")
     ap.add_argument("--keys", help="admin keys file")
     ap.add_argument("--fake", action="store_true", help="simulate the PSU + no real board needed")
     args = ap.parse_args()
@@ -437,13 +531,20 @@ def _cli() -> None:
 
     preset = PRESETS.get(args.preset, {}) if args.preset else {}
     levels = ([int(x) for x in args.levels.split(",")] if args.levels else list(DEFAULT_LEVELS))
+    combos = build_matrix() if args.matrix else []
+    # In a matrix run the per-combo mode/lin come from `combos`; keep only
+    # the base frequency params from any preset.
+    if combos:
+        preset = {k: v for k, v in preset.items() if k != "mode"}
     cfg = SweepConfig(
         boards=[BoardRef(ip=ip) for ip in args.board] or [BoardRef(ip="fake")],
         psu_host=args.psu or "", psu_port=args.psu_port,
         bus_voltage=args.bus, current_limit_a=args.ilim,
-        label=args.preset or "sweep", lin_enable=args.lin,
+        label=("matrix" if combos else (args.preset or "sweep")),
+        lin_enable=args.lin,
         levels=levels, settle_s=args.settle, samples=args.samples,
         sample_interval_s=args.interval, fake=args.fake,
+        retries=args.retries, combos=combos,
         **preset,
     )
 
@@ -457,8 +558,8 @@ def _cli() -> None:
             print(f"  {runner.done_points}/{runner.total_points}", end="\r")
     for line in runner.log:
         print(line)
-    if runner.csv_path:
-        print(f"\nResults: {runner.csv_path}")
+    if runner.report_path:
+        print(f"\nResults: {runner.report_path}")
     sys.exit(0 if runner.state == "done" else 1)
 
 

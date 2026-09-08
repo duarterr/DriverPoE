@@ -76,7 +76,7 @@
         <input id="psuHost" class="field" placeholder="192.168.1.50">
       </label>
       <label class="f">PSU port
-        <input id="psuPort" class="field" type="number" value="5555">
+        <input id="psuPort" class="field" type="number" value="80">
       </label>
       <label class="cb"><input id="fake" type="checkbox"> Simulate PSU (no hardware)</label>
     </div>
@@ -148,7 +148,7 @@
     <h2>Sweep</h2>
     <div class="grid">
       <label class="f" style="grid-column:1/-1">Dim levels (%, comma-separated)
-        <input id="levels" class="field" value="0,1,5,10,20,30,40,50,60,70,80,90,100">
+        <input id="levels" class="field" value="0,1,5,10,20,30,40,50,60,70,80,85,90,95,100">
       </label>
       <label class="f">Settle time (s)
         <input id="settle" class="field" type="number" value="1.0" step="0.1">
@@ -162,6 +162,17 @@
       <label class="f">Power-up timeout (s)
         <input id="powTimeout" class="field" type="number" value="20">
       </label>
+      <label class="f">Command retries
+        <input id="retries" class="field" type="number" value="2" min="0">
+      </label>
+      <label class="cb" style="grid-column:1/-1"><input id="matrix" type="checkbox">
+        Run full matrix in sequence (with/without linearization &times; hybrid, analog, PWM &mdash; 6 sweeps)</label>
+    </div>
+    <div id="matrixNote" class="msg" hidden>
+      Matrix mode ignores the Dimming mode / Linearization fields above &mdash;
+      each combo sets its own. One Excel file: a <b>NãoLinearizado</b> and a
+      <b>Linearizado</b> sheet (table + Total-vs-Dimming chart, one curve per mode),
+      plus a <b>Dados</b> sheet with every raw column.
     </div>
   </div>
 
@@ -170,7 +181,7 @@
     <div class="row">
       <button id="btnRun">Play &#9654;</button>
       <button class="danger" id="btnStop" disabled>Stop</button>
-      <button class="ghost" id="btnCsv" disabled>Download CSV</button>
+      <button class="ghost" id="btnReport" disabled>Download Excel</button>
       <span id="runState" class="pill">idle</span>
     </div>
     <div style="margin-top:10px">
@@ -236,7 +247,15 @@ $('btnPsu').addEventListener('click', async () => {
   try {
     const q = new URLSearchParams({ host: $('psuHost').value, port: $('psuPort').value, fake: $('fake').checked });
     const j = await api('/api/psu?' + q);
-    m.className = 'msg ok'; m.textContent = j.idn;
+    m.className = 'msg ok';
+    if (j.rails) {
+      const r = j.rails;
+      m.textContent = `${j.idn} [${j.transport}]  `
+        + `CH2 ${r.CH2.voltage} V / ${r.CH2.power} W · `
+        + `CH3 ${r.CH3.voltage} V / ${r.CH3.power} W`;
+    } else {
+      m.textContent = j.idn;
+    }
   } catch (e) { m.className = 'msg err'; m.textContent = e.message; }
 });
 
@@ -306,9 +325,15 @@ function buildRequest() {
     samples: parseInt($('samples').value, 10),
     sample_interval_s: parseFloat($('interval').value),
     power_timeout_s: parseFloat($('powTimeout').value),
+    retries: parseInt($('retries').value, 10) || 0,
+    matrix: $('matrix').checked,
     fake: $('fake').checked,
   };
 }
+
+$('matrix').addEventListener('change', () => {
+  $('matrixNote').hidden = !$('matrix').checked;
+});
 
 $('btnRun').addEventListener('click', async () => {
   const m = $('runMsg'); m.className = 'msg'; m.textContent = 'starting...';
@@ -317,12 +342,15 @@ $('btnRun').addEventListener('click', async () => {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(buildRequest()),
     });
-    m.className = 'msg ok'; m.textContent = 'running: ' + j.boards.join(', ');
+    let txt = 'running: ' + j.boards.join(', ');
+    if (j.combos && j.combos.length) txt += `  — ${j.combos.length} combos`;
+    if (j.deferred && j.deferred.length) txt += `  (deferred until PSU on: ${j.deferred.join(', ')})`;
+    m.className = 'msg ok'; m.textContent = txt;
     startPolling();
   } catch (e) { m.className = 'msg err'; m.textContent = e.message; }
 });
 $('btnStop').addEventListener('click', () => api('/api/run/stop', { method: 'POST' }));
-$('btnCsv').addEventListener('click', () => { window.location = '/api/run/csv'; });
+$('btnReport').addEventListener('click', () => { window.location = '/api/run/report'; });
 
 function startPolling() { if (!poll) poll = setInterval(refresh, 1000); refresh(); }
 
@@ -334,7 +362,7 @@ async function refresh() {
   $('runState').className = 'pill' + (running ? ' on' : '');
   $('btnRun').disabled = running;
   $('btnStop').disabled = !running;
-  $('btnCsv').disabled = !s.csv_path;
+  $('btnReport').disabled = !s.report_path;
   $('prog').max = s.total_points || 1;
   $('prog').value = s.done_points || 0;
   const cur = s.current || {};
