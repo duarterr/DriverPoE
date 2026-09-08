@@ -23,7 +23,7 @@ class TestAdminDefaultSecret(unittest.TestCase):
         self.assertEqual(len(ADMIN_DEFAULT_SECRET), SECRET_LEN)
 
     def test_matches_documented_ascii_value(self):
-        # MUST match ADMIN_DEFAULT_SECRET in main/poe_luminaire_main.h byte for byte.
+        # MUST match ADMIN_DEFAULT_SECRET in firmware/main/poe_luminaire_main.h byte for byte.
         self.assertEqual(ADMIN_DEFAULT_SECRET, b"DriverPoE-default-admin-secret!!")
 
 

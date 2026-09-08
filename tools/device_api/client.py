@@ -200,7 +200,7 @@ class AdminClient:
         """Single round trip, no staging: payload = AES-256-GCM(new_secret)
         under the OLD secret, GCM nonce = the CHALLENGE nonce, AAD = the
         packet header -- must match handle_change_secret() in
-        components/admin_channel/admin_channel.c exactly. Returns
+        firmware/components/admin_channel/admin_channel.c exactly. Returns
         (result, new_secret) -- the caller (client.py's callers, e.g.
         cli.py) is responsible for persisting new_secret to a SecretStore
         on success; this method has no storage side effects of its own."""
@@ -234,7 +234,7 @@ class AdminClient:
                     progress_callback: Callable[[int, int], None] | None = None,
                     max_retries_per_chunk: int = 5) -> CommandResult:
         """Pushes `image` (raw firmware .bin bytes) to the device over
-        OTA_BEGIN/OTA_CHUNK*/OTA_END -- see components/admin_channel/
+        OTA_BEGIN/OTA_CHUNK*/OTA_END -- see firmware/components/admin_channel/
         admin_protocol.h's ADMIN_TYPE_OTA_* comments for the wire contract.
         Does NOT reboot the device -- the new image only ever runs after a
         separate reboot() call, and only once this returns a CommandResult

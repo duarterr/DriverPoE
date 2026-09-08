@@ -1,7 +1,7 @@
 """Wire-format checks for dmxtool's Art-Net / sACN packet builders.
 
-These mirror the offsets components/dmx_input/dmx_artnet.c and
-components/dmx_input/dmx_sacn.c parse -- if the firmware layout changes,
+These mirror the offsets firmware/components/dmx_input/dmx_artnet.c and
+firmware/components/dmx_input/dmx_sacn.c parse -- if the firmware layout changes,
 these should change with it.
 """
 from __future__ import annotations
