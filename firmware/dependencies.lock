@@ -16,7 +16,7 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 6.0.2
+    version: 6.1.0
 direct_dependencies:
 - espressif/ip101
 manifest_hash: 7fb0035cfa4ce91f0aa82643f540cd12764f083e245e2cfd423db4a039f0ef5a

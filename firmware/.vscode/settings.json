@@ -5,6 +5,7 @@
   "cmake.configureOnEdit": false,
   "cmake.automaticReconfigure": false,
   "cmake.autoSelectActiveFolder": false,
+  "cmake.options.statusBarVisibility": "hidden",
   "cmake.options.advanced": {
     "build": {
       "statusBarVisibility": "inherit",
@@ -24,16 +25,15 @@
     "target/esp32.cfg"
   ],
   "idf.portWin": "COM6",
-  "idf.currentSetup": "D:\\ESP\\v6.0.2\\esp-idf",
+  "idf.currentSetup": "D:\\esp\\v6.1\\esp-idf",
   "idf.customExtraVars": {
     "IDF_TARGET": "esp32"
   },
-  "idf.buildPath": "${workspaceFolder}/firmware/build",
-  "clangd.path": "C:\\Espressif\\tools\\esp-clang\\esp-20.1.1_20250829\\esp-clang\\bin\\clangd.exe",
+  "idf.buildPath": "${workspaceFolder}/build",
   "clangd.arguments": [
     "--background-index",
     "--query-driver=**",
-    "--compile-commands-dir=${workspaceFolder}/firmware/build"
+    "--compile-commands-dir=${workspaceFolder}/build"
   ],
   "idf.flashType": "UART"
 }

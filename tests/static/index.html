@@ -73,7 +73,7 @@
     <h2>Bench connection</h2>
     <div class="grid">
       <label class="f">PSU host / IP
-        <input id="psuHost" class="field" placeholder="192.168.1.50">
+        <input id="psuHost" class="field" placeholder="192.168.1.110" value="192.168.1.110">
       </label>
       <label class="f">PSU port
         <input id="psuPort" class="field" type="number" value="80">
@@ -93,7 +93,7 @@
     </div>
     <div class="row" style="margin-top:10px">
       <label class="f" style="flex:1">Broadcast address
-        <input id="bcast" class="field" placeholder="(auto)">
+        <input id="bcast" class="field" placeholder="192.168.1.255" value="192.168.1.255">
       </label>
       <button class="ghost" id="btnScan" style="align-self:flex-end">Scan network</button>
     </div>
@@ -140,7 +140,7 @@
       <label class="f">Per-rail current limit (A)
         <input id="ilim" class="field" type="number" value="1.0" step="0.05">
       </label>
-      <label class="cb"><input id="srcOff" type="checkbox" checked> Turn source off when done</label>
+      <label class="cb"><input id="srcOff" type="checkbox"> Turn source off when done</label>
     </div>
   </div>
 
