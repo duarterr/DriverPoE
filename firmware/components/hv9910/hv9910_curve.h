@@ -27,15 +27,18 @@
  *
  * --- Output-power linearization (the `linearize` flag) ---
  * The LD reference -> LED power transfer on this board is far from linear:
- * the HV9910 buck is discontinuous over most of the range (power ~ drive^2.5
- * -- "50%" gives ~16% power) and goes continuous near full drive. When
+ * the HV9910 buck is discontinuous over most of the range (power ~ drive^2.4
+ * -- "50%" drive gives ~17% power) and goes continuous near full drive. When
  * `linearize` is set, hv9910_curve_eval pre-distorts the LD duty by the
- * measured inverse (see hv9910_curve.c for the derivation):
- *   drive(L) = min( 1.0758 * L^0.4 ,  0.875 + 0.125*L )
+ * inverse fitted to a 5-board bench sweep (see hv9910_curve.c for the
+ * derivation):
+ *   drive(L) = min( 1.046 * L^0.416 ,  0.767 + 0.233*L )
  * applied to ld_duty_q only, so PWM mode (ld_duty_q == Q_ONE) is untouched
  * -- it has no analog path -- and the HYBRID knee stays continuous (see
  * below): both branches still reduce to light output ~ commanded level, now
- * in *physical* units, not just in Q16 duty. Round-trips within ~1.5 pp.
+ * in *physical* units, not just in Q16 duty. The 5-board mean round-trip
+ * tracks the ideal within ~1 pp across the whole scale (no flat top);
+ * unit-to-unit spread adds ~5 pp RMS that a single curve cannot remove.
  *
  * --- HYBRID continuity (why there is no visible step at the crossover) ---
  * Light output is proportional to  Phi = ld_duty_q * pwmd_duty_q / Q_ONE

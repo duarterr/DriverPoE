@@ -20,34 +20,43 @@ static inline uint32_t q_div(uint32_t a, uint32_t b)
  * Output-power linearization for the LD (analog current-reference) path.
  *
  * On this board the LD reference -> LED power transfer is far from linear
- * because the HV9910 buck changes conduction mode across the range. Measured
- * and normalised on an AUX/PoE+ supply (forward: power P vs drive x):
+ * because the HV9910 buck changes conduction mode across the range. Fitted
+ * to the non-linearized bench sweep of 5 boards (Drv1..5, Rt = 220k) on an
+ * AUX/PoE+ supply (forward: idle-subtracted power P vs drive x):
  *
- *   - DCM (x below ~0.97): the converter is discontinuous, average current
- *     is ~quadratic in the reference, so  P ~= (x/A)^2.5  with A = 0.833
- *     ("50%" -> ~16% power). Inverting:  x = A * P^0.4.
+ *   - DCM (x below ~0.95): the converter is discontinuous, average current
+ *     is ~quadratic in the reference, so  P ~= (x/A)^2.4  with A = 0.956
+ *     ("50%" drive -> ~17% power). Inverting:  x = A * P^0.416.
  *   - CCM (x near full):   the converter goes continuous, average current is
  *     ~linear in the reference minus a fixed ripple term, so
- *     P ~= (x - 0.875)/0.125. Inverting:  x = 0.875 + 0.125*P.
+ *     P ~= (x - 0.767)/0.233. Inverting:  x = 0.767 + 0.233*P.
  *
  * The buck runs in whichever mode delivers the target power at the lower
  * drive, so the drive for a commanded level L is the minimum of the two
- * inverses (they cross at L ~= 0.78, x ~= 0.97):
+ * inverses (they cross at L ~= 0.80, x ~= 0.95 -- a slope kink there, but
+ * drive(L) stays continuous and monotone, and the DMX/console layer is the
+ * only source of fades so it is not visible):
  *
- *     drive(L) = min( 1.0758 * L^0.4 ,  0.875 + 0.125*L )      (1.0758 = 1/0.833)
+ *     drive(L) = min( 1.046 * L^0.416 ,  0.767 + 0.233*L )     (1.046 = 1/0.956)
  *
- * drive(0)=0, drive(1)=1, monotone. Round-trips to within ~1.5 pp of the
- * bench data across 0..100%. Applied to the curve's ld_duty_q when
- * linearization is enabled: PWM mode (ld_duty_q == Q_ONE, drive(1) == 1) is
+ * drive(0)=0, drive(1)=1, monotone. The mean of the 5-board round-trip
+ * (command -> achieved power) tracks the ideal to within ~1 pp across the
+ * whole 0..100% scale -- no compressed / flat top. Unit-to-unit spread is
+ * ~5 pp RMS on top of that and is not correctable by a single curve. The
+ * old (1.076*L^0.4, 0.875+0.125L) fit ran ~10 pp hot in the mid-range and
+ * squeezed 80..100% commanded into an almost flat output.
+ *
+ * Applied to the curve's ld_duty_q when linearization is enabled: PWM mode
+ * (ld_duty_q == Q_ONE, drive(1) == 1) is
  * untouched -- it has no analog path; ANALOG / HYBRID-above-knee get the
  * pre-distortion; HYBRID-below-knee freezes ld at drive(crossover) while
  * PWMD does the linear chop, so the knee stays continuous (both sides reduce
  * to light output ~ commanded level).
  */
-#define LIN_DCM_GAIN  1.0758f   /* 1 / 0.833  -- DCM extrapolation reaches only 83.3% at full drive */
-#define LIN_DCM_EXP   0.4f      /* DCM: P ~ drive^2.5  ->  drive ~ P^0.4 */
-#define LIN_CCM_BASE  0.875f    /* CCM: drive ~ 0.875 + 0.125*P (fixed ripple offset) */
-#define LIN_CCM_SLOPE 0.125f
+#define LIN_DCM_GAIN  1.046f    /* 1 / 0.956  -- DCM extrapolation reaches only 95.6% at full drive */
+#define LIN_DCM_EXP   0.416f    /* DCM: P ~ drive^2.40  ->  drive ~ P^0.416 */
+#define LIN_CCM_BASE  0.767f    /* CCM: drive ~ 0.767 + 0.233*P (fixed ripple offset) */
+#define LIN_CCM_SLOPE 0.233f    /* BASE + SLOPE == 1.0  ->  drive(1) == 1 exactly */
 
 static uint32_t linearize_ld(uint32_t l)
 {
