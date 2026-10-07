@@ -4,7 +4,12 @@ from __future__ import annotations
 import socket
 import unittest
 
-from device_api.discovery import broadcast_info, resolve_device_by_ip
+from device_api.discovery import (
+    broadcast_address_for,
+    broadcast_info,
+    list_local_ipv4s,
+    resolve_device_by_ip,
+)
 from device_api.tests.test_client import SERIAL, FakeDevice
 
 
@@ -31,6 +36,31 @@ class TestBroadcastInfo(unittest.TestCase):
         # LAN broadcast domain in the test environment.
         results = broadcast_info("127.0.0.1", port=1, timeout=0.2)
         self.assertEqual(results, [])
+
+    def test_bind_ip_still_reaches_a_real_device(self):
+        # Binding the scan socket to a specific local address (the
+        # --iface case) must not break an ordinary broadcast/unicast --
+        # loopback stands in for "one specific NIC" here.
+        with FakeDevice() as device:
+            results = broadcast_info("127.0.0.1", device.port, timeout=1.0, bind_ip="127.0.0.1")
+        self.assertEqual([r.serial for r in results], [SERIAL])
+
+    def test_bind_ip_rejects_an_address_this_host_doesnt_have(self):
+        with self.assertRaises(OSError):
+            broadcast_info("127.0.0.1", port=1, timeout=0.2, bind_ip="203.0.113.1")
+
+
+class TestBroadcastAddressFor(unittest.TestCase):
+    def test_assumes_a_slash_24(self):
+        self.assertEqual(broadcast_address_for("192.168.1.42"), "192.168.1.255")
+        self.assertEqual(broadcast_address_for("10.0.0.1"), "10.0.0.255")
+
+
+class TestListLocalIpv4s(unittest.TestCase):
+    def test_returns_a_list_without_loopback(self):
+        addrs = list_local_ipv4s()
+        self.assertIsInstance(addrs, list)
+        self.assertTrue(all(isinstance(a, str) and not a.startswith("127.") for a in addrs))
 
 
 if __name__ == "__main__":
