@@ -92,3 +92,6 @@ tools/admin_secrets.json
 *.suo
 # Visual Studio Solution Document States
 *.sln.docstates
+
+# Dot-directories (editor, devcontainer, tool caches) -- kept local only
+.*/
