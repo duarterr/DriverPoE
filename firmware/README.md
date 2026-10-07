@@ -128,6 +128,23 @@ Open `http://127.0.0.1:8001/`; keep it on a trusted management network.
 
 The reactive-to-sound mode analyzes the whole picked file server-side, once, before playback starts (`tools/webui_demo/audio_reactive.py`: a mel-spaced filterbank, per-band automatic gain, spectral-flux onset/beat detection, and an asymmetric attack/release envelope — see that module's own docstring for the algorithm) — the browser just decodes the file to raw samples, posts them to `/api/music/analyze`, and during playback looks up the precomputed intensity for the current position instead of analyzing anything live.
 
+**`tools/monitor/`** — a field monitor for units already deployed: polls each one's unauthenticated `INFO` on an interval and diffs consecutive snapshots to log anomalous transitions instead of raw values. Written for the symptom of a unit left ON going dark on its own while the PoE source visibly renegotiates — the diff tells apart, from the same "LED went dark" surface symptom: a full MCU **reboot** (`uptime_s` went backwards; `reset_reason` says brownout/watchdog/panic/…), a **PoE drop-out with no reboot** (`poe_ready` flips false and back without `uptime_s` resetting — a VBUS sag or a class/CDB re-negotiation the MCU itself survived), a **power-budget downgrade** (`power_state` full → capped/blocked/no_power), and **`led_dark`** (`driver_on` went false while `desired_on` is still true and stayed true — read together with whatever else fired at the same poll). A VBUS sag past a configurable `%` threshold is flagged even when `poe_ready` never drops, and an unreachable unit is reported both going down and coming back (with the outage length) instead of just going quiet:
+
+```powershell
+Set-Location tools
+python -m monitor --board 192.168.1.61 --board 192.168.1.62
+python -m monitor --scan --log events.jsonl --snapshot-log snapshots.jsonl
+```
+
+Anomalies print to stdout as they're detected; `--log` also appends them as JSON Lines, and `--snapshot-log` additionally records every successful poll (not just anomalies) for plotting VBUS/uptime/power_state over time after the fact. Pure stdlib + `device_api` — no extra dependencies, no admin secret needed (`INFO` is unauthenticated).
+
+On a multi-homed host (Ethernet + Wi-Fi, a VPN adapter...) the broadcast used by `--scan` is only ever a guess (whichever NIC the OS would pick to reach the internet) and can miss the units' own LAN entirely. `--list-interfaces` prints this host's local IPv4s so `--iface` can pin the scan to the right one — it binds the socket to that address (forcing the broadcast out that NIC) and, unless `--broadcast` is also given, derives the target `/24` from it:
+
+```powershell
+python -m monitor --list-interfaces
+python -m monitor --scan --iface 192.168.1.132
+```
+
 ## Driver / dimming modes
 
 The HV9910 has two dimming inputs wired on this board: **LD** (linear dimming — an analog current reference fed by GPIO33 through a PCB RC/DAC) and **PWMD** (digital dimming — a logic line on GPIO32; driving it low is the real "off"). `components/hv9910/` drives both as LEDC PWM outputs and maps a commanded brightness to the two duties per a runtime-selectable mode. The math is a pure, isolated function in `components/hv9910/hv9910_curve.c` (its file comment carries the continuity proof and the resolution tables).
@@ -140,7 +157,7 @@ The HV9910 has two dimming inputs wired on this board: **LD** (linear dimming �
 
 Reaching level 0 in any mode drives PWMD to 0. There is no fade engine — every level change is instantaneous; smoothing comes from the DMX layer or a lighting console.
 
-**Output-power linearization** (`lin_enable`, default on): the LD reference → LED power transfer on this board is far from linear — the HV9910 buck is discontinuous over most of the range (`power ≈ drive^2.5`, so "50 %" produces ~16 % of full power) and goes continuous near full drive. When enabled, `hv9910_curve.c` pre-distorts the LD duty by the measured inverse `drive(L) = min(1.0758·L^0.4, 0.875 + 0.125·L)` (DCM branch ∥ CCM branch — derivation in the file). It touches the LD duty only, so it affects **Analog** and **Hybrid** (PWM has no analog path) and the Hybrid knee stays continuous — those modes then track commanded power within ~1.5 pp. It also makes `poe_cap_pct` an honest "% of max power".
+**Output-power linearization** (`lin_enable`, default on): the LD reference → LED power transfer on this board is far from linear — the HV9910 buck is discontinuous over most of the range (`power ≈ drive^2.4`, so "50 %" drive produces ~17 % of full power) and goes continuous near full drive. When enabled, `hv9910_curve.c` pre-distorts the LD duty by the inverse fitted to a 5-board bench sweep `drive(L) = min(1.046·L^0.416, 0.767 + 0.233·L)` (DCM branch ∥ CCM branch — derivation in the file). It touches the LD duty only, so it affects **Analog** and **Hybrid** (PWM has no analog path) and the Hybrid knee stays continuous — the 5-board **mean** command→power curve is then linear within ~1 pp across the whole scale (the earlier fit ran ~10 pp hot mid-range and left 80–100 % almost flat); per-unit spread adds ~5 pp RMS that a single curve can't remove. It also makes `poe_cap_pct` an honest "% of max power".
 
 ### Power policy (PoE vs PoE+)
 
@@ -194,6 +211,7 @@ python -m unittest discover -s device_api/tests -v
 python -m unittest discover -s dmxtool/tests -v      # Art-Net/sACN packet wire format
 python -m unittest discover -s webui/tests -v        # admin route wiring (needs fastapi)
 python -m unittest discover -s webui_demo/tests -v   # demo route wiring
+python -m unittest discover -s monitor/tests -v      # anomaly-detection state machine
 ```
 
 ## Structure

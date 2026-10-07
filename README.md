@@ -11,7 +11,8 @@ and **sACN (E1.31)** once commissioned, so any lighting console drives it as a
 | Path | What it is |
 | --- | --- |
 | [`firmware/`](firmware/) | The ESP-IDF firmware. Run `idf.py` from this directory. See [firmware/README.md](firmware/README.md) for the architecture, the admin protocol, the DMX layer, the dimming modes and the power policy. |
-| [`tools/`](tools/) | Host-side Python. `device_api/` is the pure protocol/HMAC/AES-GCM/discovery library; `webui/` is the local admin web UI (FastAPI) built on it; `webui_demo/` is an Art-Net-only stage-control demo (no auth); `dmxtool/` is a stdlib-only Art-Net/sACN test transmitter. |
+| [`hardware/`](hardware/) | Altium Designer projects for the two boards: `PoE_Base/` and `PoE_Controller/`. Open the `.PrjPcb` in each folder. |
+| [`tools/`](tools/) | Host-side Python. `device_api/` is the pure protocol/HMAC/AES-GCM/discovery library; `webui/` is the local admin web UI (FastAPI) built on it; `webui_demo/` is an Art-Net-only stage-control demo (no auth); `dmxtool/` is a stdlib-only Art-Net/sACN test transmitter; `monitor/` polls deployed units' INFO on an interval and logs anomalies (reboots, PoE drop-outs, the LED going dark while still commanded on). |
 | [`tests/`](tests/) | Bench tool: an automated dimming/power sweep against real boards with a Rigol DP1308A PSU, a web UI plus a headless harness, and an `.xlsx` report. |
 | [`manual/`](manual/) | End-user manual (`manual.html`). |
 
@@ -34,6 +35,16 @@ Set-Location tools
 python -m webui.app          # http://127.0.0.1:8000/
 ```
 
+**Field monitor** (watches deployed units, logs reboots / PoE drop-outs / an LED going dark on its own):
+
+```powershell
+Set-Location tools
+python -m monitor --board 192.168.1.61 --board 192.168.1.62
+python -m monitor --scan --log events.jsonl   # discover on the LAN, keep a JSONL event log
+python -m monitor --list-interfaces           # multi-homed host? list local IPs to scan out of
+python -m monitor --scan --iface 192.168.1.132
+```
+
 **Host-tool tests:**
 
 ```powershell
@@ -42,6 +53,7 @@ python -m unittest discover -s device_api/tests -v
 python -m unittest discover -s dmxtool/tests -v
 python -m unittest discover -s webui/tests -v         # needs fastapi
 python -m unittest discover -s webui_demo/tests -v
+python -m unittest discover -s monitor/tests -v
 ```
 
 ## Two control planes
